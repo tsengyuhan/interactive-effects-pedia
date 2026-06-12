@@ -1,0 +1,6 @@
+Thumbs.db
+Desktop.ini
+*.log
+# 隊長/工人協作的暫存檔，不發布
+.claude/
+team/
