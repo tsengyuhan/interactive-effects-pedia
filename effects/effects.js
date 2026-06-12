@@ -34,6 +34,23 @@ window.EFFECTS = [
     hasParams: true
   },
   {
+    id: "finger-frame",
+    title: "手指取景框",
+    category: "身體動作",
+    description: "雙手比 L 字框出一個取景框，框內畫面即時變成負片或馬賽克",
+    instructions: "面對鏡頭，雙手各比出 L 字手勢（拇指與食指張開約 90 度），兩手的虎口會撐出一個取景框",
+    tech: ["MediaPipe Hands", "getUserMedia", "Canvas 2D"],
+    principle: [
+      "MediaPipe 手部模型即時輸出每隻手 21 個關節點座標",
+      "計算拇指與食指向量的夾角，接近 90 度即判定為 L 手勢",
+      "取兩手虎口位置為矩形對角，框內像素逐格重算（負片＝反相、馬賽克＝區塊取樣色）"
+    ],
+    requirements: ["攝影機", "建議 Chrome / Edge", "舊機器約 15–25 fps，新機器可達 30 fps 以上", "需經 start.bat 或 HTTPS 開啟"],
+    offline: true,
+    offlineNote: "",
+    hasParams: true
+  },
+  {
     id: "_smoke",
     title: "外殼煙霧測試",
     category: "網頁互動",
