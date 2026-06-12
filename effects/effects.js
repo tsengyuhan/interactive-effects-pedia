@@ -17,6 +17,23 @@
 // }
 window.EFFECTS = [
   {
+    id: "ink-brush",
+    title: "水墨筆觸",
+    category: "網頁互動",
+    description: "在宣紙上長按拖曳，畫出會暈染的水墨筆畫",
+    instructions: "按住滑鼠（或手指）在畫布上拖曳；停留越久墨暈越開，快速劃過會出現飛白",
+    tech: ["Canvas 2D"],
+    principle: [
+      "用程式雜訊產生宣紙紋理當底",
+      "筆畫由連續蓋印的半透明墨點組成，移動速度決定墨點的濃淡與密度",
+      "落筆處登記為「暈染點」，逐幀向外擴張、透明度遞減，模擬墨水滲入紙纖維"
+    ],
+    requirements: ["滑鼠或觸控螢幕", "任何現代瀏覽器", "無特殊效能需求"],
+    offline: true,
+    offlineNote: "",
+    hasParams: true
+  },
+  {
     id: "_smoke",
     title: "外殼煙霧測試",
     category: "網頁互動",
