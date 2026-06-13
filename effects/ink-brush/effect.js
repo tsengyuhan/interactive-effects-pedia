@@ -48,6 +48,9 @@
   inkCanvas.style.zIndex = "1";
   strokeCanvas.style.zIndex = "1";
   strokeCanvas.style.pointerEvents = "none";
+  // 濃度＝整條筆畫圖層的不透明度：低濃度真的淡、且 0→1 範圍均勻；
+  // 墨點本身的濃淡留給運筆速度決定，才有不平均的墨韻
+  strokeCanvas.style.opacity = String(state.density);
   inputCanvas.style.zIndex = "2";
   inputCanvas.style.touchAction = "none";
   inputContext.canvas.setAttribute("aria-label", "水墨筆觸畫布");
@@ -57,6 +60,10 @@
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
+  }
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
   }
 
   function hexToRgb(hex) {
@@ -164,7 +171,8 @@
     bleeds.push({
       x,
       y,
-      r: state.size * (0.34 + Math.random() * 0.18),
+      // 起始半徑也隨暈染參數放大，讓低/高暈染差異更明顯
+      r: state.size * (0.3 + state.bleed * 0.45 + Math.random() * 0.15),
       alpha: state.density * strength * 0.12,
       lobes
     });
@@ -188,6 +196,22 @@
 
   // 把整條 pointer.points 沿路徑蓋密集柔邊墨點：每幀整條重畫，
   // 重疊的柔邊互相累積成連貫且中央濃、邊緣自然暈散的筆跡（不會有黑芯+兩條灰軌、也無顆粒）。
+  // 依運筆速度產生一個取樣點：慢筆濃而粗、快筆淡而細，
+  // 並加一點建立時就固定的隨機抖動，讓墨色沿線不平均（每幀重畫不會閃爍）。
+  function strokePoint(x, y, speed) {
+    const fast = clamp((speed - 0.3) / 1.2, 0, 1);
+    const jitter = 0.82 + Math.random() * 0.36;
+    return {
+      x,
+      y,
+      a: clamp(lerp(0.2, 0.075, fast) * jitter, 0, 1),
+      r: state.size * 0.5 * lerp(1, 0.62, fast)
+    };
+  }
+
+  // 每個取樣點自帶 a（柔邊墨點 alpha）與 r（半徑），由運筆速度決定：
+  // 慢筆濃而粗、快筆淡而細，沿線插值後疊出濃淡不均的墨韻（不再像均勻畫筆）。
+  // 不在這裡乘濃度——濃度由 strokeCanvas 圖層不透明度統一控制。
   function drawActiveStroke() {
     clearStrokeLayer();
     const pts = pointer.points;
@@ -195,26 +219,30 @@
       return;
     }
 
-    const radius = state.size * 0.5;
-    // 沿線密集重疊累積出濃度；密度參數提高整體濃淡
-    const dabAlpha = clamp(0.12 + state.density * 0.2, 0, 1);
-
     if (pts.length === 1) {
-      stampSoft(strokeContext, pts[0].x, pts[0].y, radius, clamp(dabAlpha * 1.8, 0, 1));
+      stampSoft(strokeContext, pts[0].x, pts[0].y, pts[0].r, clamp(pts[0].a * 1.6, 0, 1));
       return;
     }
 
     let prev = pts[0];
-    stampSoft(strokeContext, prev.x, prev.y, radius, dabAlpha);
+    stampSoft(strokeContext, prev.x, prev.y, prev.r, prev.a);
     for (let i = 1; i < pts.length; i += 1) {
       const point = pts[i];
-      // 相鄰取樣點之間再補插，使墨點間距夠密（約半徑的 1/4），疊出來才平滑連續
       const dx = point.x - prev.x;
       const dy = point.y - prev.y;
       const distance = Math.hypot(dx, dy);
-      const sub = Math.max(1, Math.ceil(distance / Math.max(1, radius * 0.25)));
+      const avgRadius = (prev.r + point.r) * 0.5;
+      // 相鄰取樣點之間補插，墨點間距約半徑的 1/4，疊出來才平滑連續
+      const sub = Math.max(1, Math.ceil(distance / Math.max(1, avgRadius * 0.25)));
       for (let s = 1; s <= sub; s += 1) {
-        stampSoft(strokeContext, prev.x + dx * s / sub, prev.y + dy * s / sub, radius, dabAlpha);
+        const t = s / sub;
+        stampSoft(
+          strokeContext,
+          prev.x + dx * t,
+          prev.y + dy * t,
+          lerp(prev.r, point.r, t),
+          lerp(prev.a, point.a, t)
+        );
       }
       prev = point;
     }
@@ -227,6 +255,8 @@
       inkContext.save();
       inkContext.setTransform(1, 0, 0, 1, 0, 0);
       inkContext.globalCompositeOperation = "source-over";
+      // 與即時顯示（圖層 opacity=density）一致，烘焙時也用濃度當整體不透明度
+      inkContext.globalAlpha = clamp(state.density, 0, 1);
       inkContext.drawImage(strokeCanvas, 0, 0);
       inkContext.restore();
     }
@@ -278,11 +308,12 @@
     inkContext.globalCompositeOperation = "source-over";
     for (let index = bleeds.length - 1; index >= 0; index -= 1) {
       const bleed = bleeds[index];
-      bleed.r += 0.22 + state.bleed * 1.7;
+      // 暈染擴散速度大幅拉開差距：低暈染幾乎不擴散、高暈染快速化開一大片
+      bleed.r += 0.12 + state.bleed * 4;
       bleed.alpha *= 0.92;
       for (const lobe of bleed.lobes) {
         // 以多個偏移子瓣累積暈染，避免單一同心圓造成硬邊。
-        const spread = state.bleed * bleed.r * 0.16;
+        const spread = state.bleed * bleed.r * 0.3;
         const lobeX = bleed.x + lobe.x + Math.sign(lobe.x || 1) * spread * lobe.grow;
         const lobeY = bleed.y + lobe.y + Math.sign(lobe.y || 1) * spread * lobe.grow;
         const lobeRadius = bleed.r * lobe.r;
@@ -314,7 +345,7 @@
     pointer.y = point.y;
     pointer.time = event.timeStamp || performance.now();
     pointer.stillFrames = 0;
-    pointer.points = [point];
+    pointer.points = [strokePoint(point.x, point.y, 0)];
     strokeDirty = true;
     inputCanvas.setPointerCapture(event.pointerId);
     addBleed(point.x, point.y, 0.7);
@@ -329,17 +360,14 @@
     const dx = point.x - pointer.x;
     const dy = point.y - pointer.y;
     const distance = Math.hypot(dx, dy);
-    // 事件取樣較疏時補插中間點，路徑才會平滑連續
+    const speed = distance / Math.max(1, now - pointer.time);
+    // 事件取樣較疏時補插中間點；每個點依速度帶不同濃淡與粗細
     const steps = Math.max(1, Math.ceil(distance / Math.max(3, state.size * 0.2)));
     for (let step = 1; step <= steps; step += 1) {
-      appendPoint({
-        x: pointer.x + dx * step / steps,
-        y: pointer.y + dy * step / steps
-      });
+      appendPoint(strokePoint(pointer.x + dx * step / steps, pointer.y + dy * step / steps, speed));
     }
-    const speed = distance / Math.max(1, now - pointer.time);
     // 沿整條筆畫都產生暈染（慢筆滲得更開），讓墨跡邊緣有水墨化開的感覺
-    if (Math.random() < 0.12 + state.bleed * 0.3) {
+    if (Math.random() < 0.08 + state.bleed * 0.5) {
       addBleed(point.x, point.y, speed < 0.22 ? 0.85 : 0.5);
     }
     pointer.x = point.x;
@@ -374,12 +402,14 @@
     type: "range",
     key: "density",
     label: "墨色濃度",
-    min: 0.1,
+    min: 0.05,
     max: 1,
     step: 0.01,
     value: state.density,
     onChange(value) {
       state.density = value;
+      // 濃度即時反映到筆畫圖層不透明度
+      strokeCanvas.style.opacity = String(clamp(value, 0, 1));
     }
   });
 
