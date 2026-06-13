@@ -51,6 +51,23 @@ window.EFFECTS = [
     hasParams: true
   },
   {
+    id: "sound-ripple",
+    title: "聲音漣漪",
+    category: "聲音互動",
+    description: "對著麥克風發出聲音，池塘水面會泛起大小與餘波不同的漣漪",
+    instructions: "對麥克風說話、拍手或哼聲；聲音越大漣漪越大，音高決定餘波長短",
+    tech: ["Web Audio API", "Canvas 2D", "高度場水波模擬"],
+    principle: [
+      "麥克風訊號經 AnalyserNode 取出波形，算 RMS 得音量，自相關法估音高",
+      "水面是一張高度場網格，每幀由鄰格高度差傳遞波動，自然產生干涉與反彈",
+      "音量決定投入水面的能量（漣漪大小），音高調整衰減率（餘波長短）"
+    ],
+    requirements: ["麥克風", "建議 Chrome / Edge", "需經 start.bat 或 HTTPS 開啟"],
+    offline: true,
+    offlineNote: "",
+    hasParams: false
+  },
+  {
     id: "_smoke",
     title: "外殼煙霧測試",
     category: "網頁互動",
