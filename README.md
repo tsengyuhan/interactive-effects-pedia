@@ -4,7 +4,7 @@
 
 ## 線上網址
 
-（部署後補上）
+https://tsengyuhan.github.io/interactive-effects-pedia/
 
 ## 本機使用
 
