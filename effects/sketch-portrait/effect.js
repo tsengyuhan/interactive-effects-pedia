@@ -1,49 +1,65 @@
 import { FilesetResolver, ImageSegmenter } from "../../libs/mediapipe/vision_bundle.mjs";
 
-// 草稿紙人像：webcam 經人像分割去背後，把人的輪廓「畫」在方格稿紙上，
-// 每一格依該區域明暗用鉛筆交叉線塗陰影；拖曳格線可把稿紙撕開一條縫偷看真實畫面。
+// 草稿紙人像：webcam 經人像分割後，背景維持暖白稿紙；
+// 人像平時以稿紙格內鉛筆塗黑呈現，拖曳撕縫時在縫內切換成連續素描濾鏡。
 
 const shell = Shell.init({ id: "sketch-portrait" });
 const errorMessage = "請允許攝影機權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
 
-// 顯示用主畫布
 const canvas = document.createElement("canvas");
 const context = canvas.getContext("2d");
 const video = document.createElement("video");
 
-// 稿紙底圖（紙紋＋格線，靜態，尺寸變動時重建）
 const paperCanvas = document.createElement("canvas");
 const paperCtx = paperCanvas.getContext("2d");
 
-// 每幀重畫的「稿紙＋鉛筆素描」不透明圖層，合成時用它蓋住真實畫面、只在裂縫露出
-const sketchCanvas = document.createElement("canvas");
-const sketchCtx = sketchCanvas.getContext("2d");
+const plainPaperCanvas = document.createElement("canvas");
+const plainPaperCtx = plainPaperCanvas.getContext("2d");
 
-// 取樣畫布：縮到格子解析度，一格一像素，用來取每格平均亮度
+const coarseCanvas = document.createElement("canvas");
+const coarseCtx = coarseCanvas.getContext("2d");
+
+const fineCanvas = document.createElement("canvas");
+const fineCtx = fineCanvas.getContext("2d");
+
 const sampleCanvas = document.createElement("canvas");
 const sampleCtx = sampleCanvas.getContext("2d", { willReadFrequently: true });
 
-const HATCH_ANGLES = [Math.PI / 4, -Math.PI / 4, Math.PI / 2, 0, Math.PI / 8]; // 5 層交叉線方向
+const fineSampleCanvas = document.createElement("canvas");
+const fineSampleCtx = fineSampleCanvas.getContext("2d", { willReadFrequently: true });
+
+const finePixelCanvas = document.createElement("canvas");
+const finePixelCtx = finePixelCanvas.getContext("2d", { willReadFrequently: true });
+
+const HATCH_ANGLES = [Math.PI / 4, -Math.PI / 5, Math.PI / 2, 0, Math.PI / 9];
 const MAX_LEVEL = HATCH_ANGLES.length;
 const PAPER_COLOR = "#f1ecdd";
+const GRID_COLOR = "rgba(70, 150, 90, 0.48)";
+const PENCIL_COLOR = "rgba(35, 32, 26, 0.42)";
+const STRIP = 2;
 
 const state = {
   width: 1,
   height: 1,
-  cell: 18,        // 格子大小（px），同時是稿紙方格邊長——可調參數
-  density: 1,      // 線條濃度增益——可調參數
+  cell: 18,
+  density: 1,
+  band: 9,
+  pitch: 27,
   cols: 1,
   rows: 1,
-  cur: null,       // 目前每格陰影強度（平滑後）
-  target: null,    // 每格目標陰影強度
+  cur: null,
+  target: null,
+  fineW: 1,
+  fineH: 1,
   lastVideoTime: -1,
   hasVideoFrame: false,
   animationId: 0,
-  // 撕縫互動狀態
-  seam: null,      // { orient: "v"|"h", pos, gap }
+  seam: null,
   pressed: false,
   startX: 0,
-  startY: 0
+  startY: 0,
+  dragX: 0,
+  dragY: 0
 };
 
 canvas.style.position = "absolute";
@@ -90,74 +106,90 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-// 以格座標與層數產生穩定的偽隨機（同一格每幀抖動一致，避免閃爍）
 function hashRandom(seed) {
   const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
 }
 
 function resize() {
-  state.width = Math.max(1, shell.container.clientWidth || window.innerWidth);
-  state.height = Math.max(1, shell.container.clientHeight || window.innerHeight);
-  canvas.width = Math.floor(state.width);
-  canvas.height = Math.floor(state.height);
-  sketchCanvas.width = canvas.width;
-  sketchCanvas.height = canvas.height;
+  state.width = Math.max(1, Math.floor(shell.container.clientWidth || window.innerWidth));
+  state.height = Math.max(1, Math.floor(shell.container.clientHeight || window.innerHeight));
+  canvas.width = state.width;
+  canvas.height = state.height;
+  coarseCanvas.width = state.width;
+  coarseCanvas.height = state.height;
+  fineCanvas.width = state.width;
+  fineCanvas.height = state.height;
   buildGrid();
 }
 
-// 依容器尺寸與格子大小重算格數、配置陰影緩衝、重建稿紙底圖
 function buildGrid() {
+  state.band = Math.max(4, Math.round(state.cell * 0.5));
+  state.pitch = state.cell + state.band;
   state.cols = Math.max(1, Math.ceil(state.width / state.cell));
-  state.rows = Math.max(1, Math.ceil(state.height / state.cell));
+  state.rows = Math.max(1, Math.ceil(state.height / state.pitch));
   const count = state.cols * state.rows;
   state.cur = new Float32Array(count);
   state.target = new Float32Array(count);
   sampleCanvas.width = state.cols;
   sampleCanvas.height = state.rows;
+  buildFineBuffers();
   buildPaper();
 }
 
-// 稿紙底圖：暖白紙底＋細紙紋＋淡藍格線＋左側紅邊線
+function buildFineBuffers() {
+  const maxW = 340;
+  const scale = Math.min(1, maxW / state.width);
+  state.fineW = Math.max(1, Math.round(state.width * scale));
+  state.fineH = Math.max(1, Math.round(state.height * scale));
+  fineSampleCanvas.width = state.fineW;
+  fineSampleCanvas.height = state.fineH;
+  finePixelCanvas.width = state.fineW;
+  finePixelCanvas.height = state.fineH;
+}
+
 function buildPaper() {
-  paperCanvas.width = canvas.width;
-  paperCanvas.height = canvas.height;
+  paperCanvas.width = state.width;
+  paperCanvas.height = state.height;
+  plainPaperCanvas.width = state.width;
+  plainPaperCanvas.height = state.height;
   const w = paperCanvas.width;
   const h = paperCanvas.height;
 
   paperCtx.fillStyle = PAPER_COLOR;
   paperCtx.fillRect(0, 0, w, h);
 
-  // 紙紋：稀疏深淺斑點，一次性產生
-  const grains = Math.min(20000, Math.floor((w * h) / 90));
+  const grains = Math.min(22000, Math.floor((w * h) / 80));
   for (let i = 0; i < grains; i += 1) {
     const gx = Math.random() * w;
     const gy = Math.random() * h;
-    const dark = Math.random() < 0.5;
-    paperCtx.fillStyle = dark
-      ? "rgba(120, 110, 86, 0.05)"
-      : "rgba(255, 255, 255, 0.06)";
-    paperCtx.fillRect(gx, gy, 1.4, 1.4);
+    const dark = Math.random() < 0.55;
+    paperCtx.fillStyle = dark ? "rgba(118, 108, 84, 0.045)" : "rgba(255, 255, 255, 0.065)";
+    paperCtx.fillRect(gx, gy, 1.3, 1.3);
   }
 
-  // 方格線
-  paperCtx.strokeStyle = "rgba(120, 140, 170, 0.28)";
+  plainPaperCtx.clearRect(0, 0, w, h);
+  plainPaperCtx.drawImage(paperCanvas, 0, 0);
+
+  paperCtx.strokeStyle = GRID_COLOR;
   paperCtx.lineWidth = 1;
-  paperCtx.beginPath();
-  for (let x = 0; x <= state.cols; x += 1) {
-    const px = Math.round(x * state.cell) + 0.5;
-    paperCtx.moveTo(px, 0);
-    paperCtx.lineTo(px, h);
+  for (let row = 0; row < state.rows; row += 1) {
+    const y0 = Math.round(row * state.pitch) + 0.5;
+    const y1 = Math.round(row * state.pitch + state.cell) + 0.5;
+    paperCtx.beginPath();
+    paperCtx.moveTo(0, y0);
+    paperCtx.lineTo(w, y0);
+    paperCtx.moveTo(0, y1);
+    paperCtx.lineTo(w, y1);
+    for (let col = 0; col <= state.cols; col += 1) {
+      const x = Math.round(col * state.cell) + 0.5;
+      paperCtx.moveTo(x, y0);
+      paperCtx.lineTo(x, y1);
+    }
+    paperCtx.stroke();
   }
-  for (let y = 0; y <= state.rows; y += 1) {
-    const py = Math.round(y * state.cell) + 0.5;
-    paperCtx.moveTo(0, py);
-    paperCtx.lineTo(w, py);
-  }
-  paperCtx.stroke();
 
-  // 左側紅色邊線，像真的稿紙
-  paperCtx.strokeStyle = "rgba(196, 92, 78, 0.45)";
+  paperCtx.strokeStyle = "rgba(196, 92, 78, 0.36)";
   paperCtx.lineWidth = 1.5;
   paperCtx.beginPath();
   const margin = Math.round(state.cell * 1.5) + 0.5;
@@ -166,188 +198,190 @@ function buildPaper() {
   paperCtx.stroke();
 }
 
-// 把鏡像後的影像縮到格解析度，取每格亮度；並用人像分割遮罩決定哪些格屬於人
+function readMask(result) {
+  if (!result || !result.confidenceMasks || !result.confidenceMasks[0]) {
+    return null;
+  }
+  const mp = result.confidenceMasks[0];
+  return {
+    width: mp.width,
+    height: mp.height,
+    data: mp.getAsFloat32Array()
+  };
+}
+
+function mirroredMaskAt(mask, nx, ny) {
+  if (!mask) {
+    return 1;
+  }
+  const mx = clamp(Math.floor((1 - nx) * mask.width), 0, mask.width - 1);
+  const my = clamp(Math.floor(ny * mask.height), 0, mask.height - 1);
+  return mask.data[my * mask.width + mx];
+}
+
 function updateTargets(segmenter, now) {
   sampleCtx.save();
   sampleCtx.translate(state.cols, 0);
-  sampleCtx.scale(-1, 1); // 與顯示一致：鏡像
+  sampleCtx.scale(-1, 1);
   sampleCtx.drawImage(video, 0, 0, state.cols, state.rows);
   sampleCtx.restore();
   const pixels = sampleCtx.getImageData(0, 0, state.cols, state.rows).data;
 
-  let mask = null;
-  let maskW = 0;
-  let maskH = 0;
   const result = segmenter.segmentForVideo(video, now);
-  if (result && result.confidenceMasks && result.confidenceMasks[0]) {
-    const mp = result.confidenceMasks[0];
-    maskW = mp.width;
-    maskH = mp.height;
-    mask = mp.getAsFloat32Array(); // 0..1，人像信心值
-  }
+  const mask = readMask(result);
 
   for (let row = 0; row < state.rows; row += 1) {
+    const y = row * state.pitch + state.cell * 0.5;
     for (let col = 0; col < state.cols; col += 1) {
       const idx = row * state.cols + col;
       const p = idx * 4;
       const lum = (0.299 * pixels[p] + 0.587 * pixels[p + 1] + 0.114 * pixels[p + 2]) / 255;
-
-      let coverage = 1;
-      if (mask) {
-        // 顯示為鏡像，遮罩取原始座標需把 x 翻回去
-        const mx = Math.min(maskW - 1, Math.floor((1 - (col + 0.5) / state.cols) * maskW));
-        const my = Math.min(maskH - 1, Math.floor(((row + 0.5) / state.rows) * maskH));
-        const conf = mask[my * maskW + mx];
-        coverage = clamp((conf - 0.4) / 0.4, 0, 1); // 0.4 以下視為背景，留白
-      }
-
-      // 人像區域：越暗畫越濃；亮部仍留一點淡影讓輪廓成形
-      const shade = coverage * (0.2 + 0.8 * (1 - lum)) * state.density;
+      const x = col * state.cell + state.cell * 0.5;
+      const conf = mirroredMaskAt(mask, x / state.width, y / state.height);
+      const coverage = clamp((conf - 0.38) / 0.42, 0, 1);
+      const shade = coverage * (0.16 + 0.84 * (1 - lum)) * state.density;
       state.target[idx] = clamp(shade, 0, 1);
     }
   }
+
+  updateFineSketch(mask);
 
   if (result && typeof result.close === "function") {
     result.close();
   }
 }
 
-// 在某格內沿指定角度加入幾條抖動的平行短線（堆進目前路徑，最後統一 stroke）
-function addHatch(x, y, size, angle, seed) {
-  const cx = x + size / 2;
-  const cy = y + size / 2;
+function updateFineSketch(mask) {
+  fineCtx.setTransform(1, 0, 0, 1, 0, 0);
+  fineCtx.clearRect(0, 0, state.width, state.height);
+  fineCtx.drawImage(plainPaperCanvas, 0, 0);
+
+  fineSampleCtx.save();
+  fineSampleCtx.translate(state.fineW, 0);
+  fineSampleCtx.scale(-1, 1);
+  fineSampleCtx.drawImage(video, 0, 0, state.fineW, state.fineH);
+  fineSampleCtx.restore();
+
+  const source = fineSampleCtx.getImageData(0, 0, state.fineW, state.fineH);
+  const data = source.data;
+  const out = finePixelCtx.createImageData(state.fineW, state.fineH);
+  const dst = out.data;
+  const lum = new Float32Array(state.fineW * state.fineH);
+  const cover = new Float32Array(state.fineW * state.fineH);
+
+  for (let y = 0; y < state.fineH; y += 1) {
+    for (let x = 0; x < state.fineW; x += 1) {
+      const idx = y * state.fineW + x;
+      const p = idx * 4;
+      lum[idx] = (0.299 * data[p] + 0.587 * data[p + 1] + 0.114 * data[p + 2]) / 255;
+      cover[idx] = clamp((mirroredMaskAt(mask, (x + 0.5) / state.fineW, (y + 0.5) / state.fineH) - 0.34) / 0.42, 0, 1);
+    }
+  }
+
+  for (let y = 0; y < state.fineH; y += 1) {
+    for (let x = 0; x < state.fineW; x += 1) {
+      const idx = y * state.fineW + x;
+      const right = lum[y * state.fineW + Math.min(state.fineW - 1, x + 1)];
+      const down = lum[Math.min(state.fineH - 1, y + 1) * state.fineW + x];
+      const maskRight = cover[y * state.fineW + Math.min(state.fineW - 1, x + 1)];
+      const maskDown = cover[Math.min(state.fineH - 1, y + 1) * state.fineW + x];
+      const edge = clamp(Math.abs(lum[idx] - right) * 3.2 + Math.abs(lum[idx] - down) * 3.2 + Math.abs(cover[idx] - maskRight) * 1.5 + Math.abs(cover[idx] - maskDown) * 1.5, 0, 1);
+      const grain = hashRandom(idx * 0.77) - 0.5;
+      const diagonal = ((x + y * 2) % 7 === 0) ? 0.08 : 0;
+      const shade = cover[idx] * clamp((1 - lum[idx]) * 0.72 + edge * 0.85 + diagonal + grain * 0.08, 0, 1);
+      const value = Math.round(242 - shade * 168);
+      const p = idx * 4;
+      dst[p] = value;
+      dst[p + 1] = value;
+      dst[p + 2] = value;
+      dst[p + 3] = Math.round(clamp(cover[idx] * (0.18 + shade * 1.25), 0, 1) * 255);
+    }
+  }
+
+  finePixelCtx.putImageData(out, 0, 0);
+  fineCtx.save();
+  fineCtx.imageSmoothingEnabled = true;
+  fineCtx.drawImage(finePixelCanvas, 0, 0, state.width, state.height);
+  fineCtx.restore();
+
+  fineCtx.save();
+  fineCtx.globalCompositeOperation = "multiply";
+  fineCtx.strokeStyle = "rgba(42, 38, 32, 0.08)";
+  fineCtx.lineWidth = 1;
+  const gap = Math.max(7, state.cell * 0.55);
+  fineCtx.beginPath();
+  for (let y = -state.height; y < state.height * 2; y += gap) {
+    fineCtx.moveTo(0, y);
+    fineCtx.lineTo(state.width, y + state.width * 0.38);
+  }
+  fineCtx.stroke();
+  fineCtx.restore();
+}
+
+function addPencilStroke(ctx, x1, y1, x2, y2, seed) {
+  const steps = 3;
+  ctx.moveTo(x1, y1);
+  for (let i = 1; i <= steps; i += 1) {
+    const t = i / steps;
+    const wobble = (hashRandom(seed + i * 9.1) - 0.5) * 1.6;
+    const px = x1 + (x2 - x1) * t + wobble;
+    const py = y1 + (y2 - y1) * t + (hashRandom(seed + i * 11.7) - 0.5) * 1.6;
+    ctx.lineTo(px, py);
+  }
+}
+
+function clippedLineInRect(cx, cy, dirX, dirY, minX, minY, maxX, maxY) {
+  let tMin = -Infinity;
+  let tMax = Infinity;
+  if (Math.abs(dirX) > 0.0001) {
+    const tx1 = (minX - cx) / dirX;
+    const tx2 = (maxX - cx) / dirX;
+    tMin = Math.max(tMin, Math.min(tx1, tx2));
+    tMax = Math.min(tMax, Math.max(tx1, tx2));
+  } else if (cx < minX || cx > maxX) {
+    return null;
+  }
+  if (Math.abs(dirY) > 0.0001) {
+    const ty1 = (minY - cy) / dirY;
+    const ty2 = (maxY - cy) / dirY;
+    tMin = Math.max(tMin, Math.min(ty1, ty2));
+    tMax = Math.min(tMax, Math.max(ty1, ty2));
+  } else if (cy < minY || cy > maxY) {
+    return null;
+  }
+  if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMin >= tMax) {
+    return null;
+  }
+  return {
+    x1: cx + dirX * tMin,
+    y1: cy + dirY * tMin,
+    x2: cx + dirX * tMax,
+    y2: cy + dirY * tMax
+  };
+}
+
+function addHatch(ctx, x, y, size, angle, seed, strength) {
+  const margin = Math.max(2, size * 0.12);
+  const minX = x + margin;
+  const minY = y + margin;
+  const maxX = x + size - margin;
+  const maxY = y + size - margin;
   const dirX = Math.cos(angle);
   const dirY = Math.sin(angle);
   const perpX = -dirY;
   const perpY = dirX;
-  const half = size * 0.62;
-  for (let k = -1; k <= 1; k += 1) {
-    const r1 = hashRandom(seed + k * 7.3);
-    const r2 = hashRandom(seed + k * 13.1 + 4.2);
-    const offset = k * (size / 3) + (r1 - 0.5) * size * 0.18;
-    const ox = perpX * offset;
-    const oy = perpY * offset;
-    const len1 = half * (0.85 + r1 * 0.3);
-    const len2 = half * (0.85 + r2 * 0.3);
-    sketchCtx.moveTo(cx + ox - dirX * len1, cy + oy - dirY * len1);
-    sketchCtx.lineTo(cx + ox + dirX * len2, cy + oy + dirY * len2);
-  }
-}
+  const count = 2 + Math.floor(hashRandom(seed + 0.3) * 3 + strength * 2);
+  const span = (size - margin * 2) * 0.82;
 
-// 重畫「稿紙＋素描」圖層：先鋪底圖，再一層方向畫一次（堆疊出深淺）
-function drawSketch() {
-  sketchCtx.setTransform(1, 0, 0, 1, 0, 0);
-  sketchCtx.clearRect(0, 0, sketchCanvas.width, sketchCanvas.height);
-  sketchCtx.drawImage(paperCanvas, 0, 0);
-
-  sketchCtx.strokeStyle = "rgba(38, 36, 30, 0.45)";
-  sketchCtx.lineWidth = 1;
-  sketchCtx.lineCap = "round";
-
-  for (let layer = 0; layer < MAX_LEVEL; layer += 1) {
-    const angle = HATCH_ANGLES[layer];
-    sketchCtx.beginPath();
-    let any = false;
-    for (let row = 0; row < state.rows; row += 1) {
-      for (let col = 0; col < state.cols; col += 1) {
-        const idx = row * state.cols + col;
-        const level = Math.round(state.cur[idx] * MAX_LEVEL);
-        if (level > layer) {
-          addHatch(col * state.cell, row * state.cell, state.cell, angle, idx * 3.7 + layer * 17.0);
-          any = true;
-        }
-      }
-    }
-    if (any) {
-      sketchCtx.stroke();
-    }
-  }
-}
-
-function drawMirroredVideo() {
-  context.save();
-  context.translate(state.width, 0);
-  context.scale(-1, 1);
-  context.drawImage(video, 0, 0, state.width, state.height);
-  context.restore();
-}
-
-// 把裂縫兩側的稿紙錯開繪製，中間露出底下的真實畫面
-function composite() {
-  context.setTransform(1, 0, 0, 1, 0, 0);
-  context.clearRect(0, 0, state.width, state.height);
-  drawMirroredVideo();
-
-  const seam = state.seam;
-  if (!seam || seam.gap < 1) {
-    context.drawImage(sketchCanvas, 0, 0);
-    return;
-  }
-
-  const g = seam.gap;
-  const half = g / 2;
-  const W = state.width;
-  const H = state.height;
-  if (seam.orient === "v") {
-    const L = seam.pos;
-    if (L > 0) {
-      context.drawImage(sketchCanvas, 0, 0, L, H, -half, 0, L, H);
-    }
-    if (W - L > 0) {
-      context.drawImage(sketchCanvas, L, 0, W - L, H, L + half, 0, W - L, H);
-    }
-    paintSeamShadow(L - half, 0, L + half, H, true);
-  } else {
-    const T = seam.pos;
-    if (T > 0) {
-      context.drawImage(sketchCanvas, 0, 0, W, T, 0, -half, W, T);
-    }
-    if (H - T > 0) {
-      context.drawImage(sketchCanvas, 0, T, W, H - T, 0, T + half, W, H - T);
-    }
-    paintSeamShadow(0, T - half, W, T + half, false);
-  }
-}
-
-// 裂縫兩邊各畫一道柔和陰影，營造紙張被掀開的厚度
-function paintSeamShadow(x1, y1, x2, y2, vertical) {
-  context.save();
-  const depth = 18;
-  if (vertical) {
-    let grad = context.createLinearGradient(x1, 0, x1 - depth, 0);
-    grad.addColorStop(0, "rgba(0,0,0,0.28)");
-    grad.addColorStop(1, "rgba(0,0,0,0)");
-    context.fillStyle = grad;
-    context.fillRect(x1 - depth, 0, depth, state.height);
-    grad = context.createLinearGradient(x2, 0, x2 + depth, 0);
-    grad.addColorStop(0, "rgba(0,0,0,0.28)");
-    grad.addColorStop(1, "rgba(0,0,0,0)");
-    context.fillStyle = grad;
-    context.fillRect(x2, 0, depth, state.height);
-  } else {
-    let grad = context.createLinearGradient(0, y1, 0, y1 - depth);
-    grad.addColorStop(0, "rgba(0,0,0,0.28)");
-    grad.addColorStop(1, "rgba(0,0,0,0)");
-    context.fillStyle = grad;
-    context.fillRect(0, y1 - depth, state.width, depth);
-    grad = context.createLinearGradient(0, y2, 0, y2 + depth);
-    grad.addColorStop(0, "rgba(0,0,0,0.28)");
-    grad.addColorStop(1, "rgba(0,0,0,0)");
-    context.fillStyle = grad;
-    context.fillRect(0, y2, state.width, depth);
-  }
-  context.restore();
-}
-
-function updateSeam() {
-  const seam = state.seam;
-  if (!seam) {
-    return;
-  }
-  if (!state.pressed) {
-    seam.gap *= 0.82; // 放開後裂縫慢慢闔上
-    if (seam.gap < 1) {
-      state.seam = null;
+  for (let k = 0; k < count; k += 1) {
+    const t = count === 1 ? 0.5 : k / (count - 1);
+    const jitter = (hashRandom(seed + k * 17.3) - 0.5) * size * 0.2;
+    const offset = (t - 0.5) * span + jitter;
+    const cx = x + size / 2 + perpX * offset + (hashRandom(seed + k * 7.1) - 0.5) * 1.8;
+    const cy = y + size / 2 + perpY * offset + (hashRandom(seed + k * 8.9) - 0.5) * 1.8;
+    const line = clippedLineInRect(cx, cy, dirX, dirY, minX, minY, maxX, maxY);
+    if (line) {
+      addPencilStroke(ctx, line.x1, line.y1, line.x2, line.y2, seed + k * 5.31);
     }
   }
 }
@@ -357,6 +391,162 @@ function smoothDarkness() {
   const target = state.target;
   for (let i = 0; i < cur.length; i += 1) {
     cur[i] += (target[i] - cur[i]) * 0.35;
+  }
+}
+
+function drawCoarseSketch() {
+  coarseCtx.setTransform(1, 0, 0, 1, 0, 0);
+  coarseCtx.clearRect(0, 0, state.width, state.height);
+  coarseCtx.drawImage(paperCanvas, 0, 0);
+
+  coarseCtx.strokeStyle = PENCIL_COLOR;
+  coarseCtx.lineWidth = 0.9;
+  coarseCtx.lineCap = "round";
+  coarseCtx.lineJoin = "round";
+
+  for (let layer = 0; layer < MAX_LEVEL; layer += 1) {
+    coarseCtx.beginPath();
+    let any = false;
+    for (let row = 0; row < state.rows; row += 1) {
+      for (let col = 0; col < state.cols; col += 1) {
+        const idx = row * state.cols + col;
+        const strength = state.cur[idx];
+        const threshold = (layer + 0.35 + hashRandom(idx * 2.3 + layer * 19.7) * 0.35) / MAX_LEVEL;
+        if (strength > threshold) {
+          const angleJitter = (hashRandom(idx * 4.1 + layer * 3.9) - 0.5) * 0.28;
+          addHatch(
+            coarseCtx,
+            col * state.cell,
+            row * state.pitch,
+            state.cell,
+            HATCH_ANGLES[layer] + angleJitter,
+            idx * 11.7 + layer * 29.3,
+            strength
+          );
+          any = true;
+        }
+      }
+    }
+    if (any) {
+      coarseCtx.stroke();
+    }
+  }
+}
+
+function raisedCosine(distance, radius) {
+  if (radius <= 0 || distance >= radius) {
+    return 0;
+  }
+  return 0.5 + 0.5 * Math.cos(Math.PI * distance / radius);
+}
+
+function seamBump(seam, along) {
+  const radius = seam.radius;
+  const center = seam.orient === "v" ? seam.dragY : seam.dragX;
+  return seam.gap * raisedCosine(Math.abs(along - center), radius);
+}
+
+function composite() {
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  context.clearRect(0, 0, state.width, state.height);
+
+  const seam = state.seam;
+  if (!seam || seam.gap < 0.8) {
+    context.drawImage(coarseCanvas, 0, 0);
+    return;
+  }
+
+  if (seam.orient === "h") {
+    compositeHorizontal(seam);
+  } else {
+    compositeVertical(seam);
+  }
+}
+
+function compositeHorizontal(seam) {
+  const seamY = clamp(seam.pos, 0, state.height);
+  for (let x = 0; x < state.width; x += STRIP) {
+    const w = Math.min(STRIP, state.width - x);
+    const bump = seamBump(seam, x);
+    const half = bump / 2;
+    if (seamY > 0) {
+      context.drawImage(coarseCanvas, x, 0, w, seamY, x, -half, w, seamY);
+    }
+    if (state.height - seamY > 0) {
+      context.drawImage(coarseCanvas, x, seamY, w, state.height - seamY, x, seamY + half, w, state.height - seamY);
+    }
+    if (bump > 0.5) {
+      const sy = clamp(seamY - half, 0, state.height);
+      const ey = clamp(seamY + half, 0, state.height);
+      if (ey > sy) {
+        context.drawImage(fineCanvas, x, sy, w, ey - sy, x, sy, w, ey - sy);
+      }
+    }
+  }
+  paintVariableSeamShadow(seam, false);
+}
+
+function compositeVertical(seam) {
+  const seamX = clamp(seam.pos, 0, state.width);
+  for (let y = 0; y < state.height; y += STRIP) {
+    const h = Math.min(STRIP, state.height - y);
+    const bump = seamBump(seam, y);
+    const half = bump / 2;
+    if (seamX > 0) {
+      context.drawImage(coarseCanvas, 0, y, seamX, h, -half, y, seamX, h);
+    }
+    if (state.width - seamX > 0) {
+      context.drawImage(coarseCanvas, seamX, y, state.width - seamX, h, seamX + half, y, state.width - seamX, h);
+    }
+    if (bump > 0.5) {
+      const sx = clamp(seamX - half, 0, state.width);
+      const ex = clamp(seamX + half, 0, state.width);
+      if (ex > sx) {
+        context.drawImage(fineCanvas, sx, y, ex - sx, h, sx, y, ex - sx, h);
+      }
+    }
+  }
+  paintVariableSeamShadow(seam, true);
+}
+
+function paintVariableSeamShadow(seam, vertical) {
+  context.save();
+  context.strokeStyle = "rgba(34, 28, 18, 0.20)";
+  context.lineWidth = 1.2;
+  context.beginPath();
+  if (vertical) {
+    const x = seam.pos;
+    for (let y = 0; y <= state.height; y += STRIP) {
+      const half = seamBump(seam, y) / 2;
+      context.moveTo(x - half, y);
+      context.lineTo(x - half - 0.01, y + STRIP);
+      context.moveTo(x + half, y);
+      context.lineTo(x + half + 0.01, y + STRIP);
+    }
+  } else {
+    const y = seam.pos;
+    for (let x = 0; x <= state.width; x += STRIP) {
+      const half = seamBump(seam, x) / 2;
+      context.moveTo(x, y - half);
+      context.lineTo(x + STRIP, y - half - 0.01);
+      context.moveTo(x, y + half);
+      context.lineTo(x + STRIP, y + half + 0.01);
+    }
+  }
+  context.stroke();
+  context.restore();
+}
+
+function updateSeam() {
+  const seam = state.seam;
+  if (!seam) {
+    return;
+  }
+  if (!state.pressed) {
+    seam.gap *= 0.82;
+    if (seam.gap < 0.8) {
+      state.seam = null;
+    }
   }
 }
 
@@ -372,14 +562,13 @@ function render(segmenter) {
       updateTargets(segmenter, now);
     }
     smoothDarkness();
-    drawSketch();
+    drawCoarseSketch();
     updateSeam();
     composite();
   }
   state.animationId = window.requestAnimationFrame(() => render(segmenter));
 }
 
-// ---- 撕縫互動（滑鼠＋觸控通用的 pointer 事件）----
 function pointerPos(event) {
   const rect = canvas.getBoundingClientRect();
   return {
@@ -393,7 +582,9 @@ canvas.addEventListener("pointerdown", (event) => {
   state.pressed = true;
   state.startX = pos.x;
   state.startY = pos.y;
-  state.seam = null; // 方向待第一段位移決定
+  state.dragX = pos.x;
+  state.dragY = pos.y;
+  state.seam = null;
   canvas.style.cursor = "grabbing";
   canvas.setPointerCapture(event.pointerId);
 });
@@ -403,6 +594,8 @@ canvas.addEventListener("pointermove", (event) => {
     return;
   }
   const pos = pointerPos(event);
+  state.dragX = pos.x;
+  state.dragY = pos.y;
   const dx = pos.x - state.startX;
   const dy = pos.y - state.startY;
   if (!state.seam) {
@@ -410,18 +603,20 @@ canvas.addEventListener("pointermove", (event) => {
       return;
     }
     if (Math.abs(dx) >= Math.abs(dy)) {
-      // 往左右拖 → 沿垂直格線撕開
-      const pos2 = clamp(Math.round(state.startX / state.cell) * state.cell, 0, state.width);
-      state.seam = { orient: "v", pos: pos2, gap: 0 };
+      const seamX = clamp(Math.round(state.startX / state.cell) * state.cell, 0, state.width);
+      state.seam = { orient: "v", pos: seamX, gap: 0, radius: Math.max(120, state.height * 0.42), dragX: pos.x, dragY: pos.y };
     } else {
-      const pos2 = clamp(Math.round(state.startY / state.cell) * state.cell, 0, state.height);
-      state.seam = { orient: "h", pos: pos2, gap: 0 };
+      const seamY = clamp(Math.round(state.startY / state.pitch) * state.pitch, 0, state.height);
+      state.seam = { orient: "h", pos: seamY, gap: 0, radius: Math.max(120, state.width * 0.42), dragX: pos.x, dragY: pos.y };
     }
   }
+
+  state.seam.dragX = pos.x;
+  state.seam.dragY = pos.y;
   if (state.seam.orient === "v") {
-    state.seam.gap = clamp(Math.abs(dx) * 1.6, 0, state.width * 0.72);
+    state.seam.gap = clamp(Math.abs(dx) * 1.55, 0, Math.min(state.width * 0.68, 180));
   } else {
-    state.seam.gap = clamp(Math.abs(dy) * 1.6, 0, state.height * 0.72);
+    state.seam.gap = clamp(Math.abs(dy) * 1.55, 0, Math.min(state.height * 0.68, 180));
   }
 });
 
