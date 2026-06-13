@@ -72,11 +72,11 @@ window.EFFECTS = [
     title: "玩弄文字於指尖",
     category: "身體動作",
     description: "輸入文字，文字像繩子般垂掛、纏繞並連接你的手指",
-    instructions: "在上方輸入文字；單手時文字繩從指尖垂下，雙手時連接兩手對應手指，隨手晃動",
+    instructions: "在上方輸入文字；可調整字體大小、粗細、緊密度與重力。單手時文字繩披掛在指尖，雙手時連接兩手對應手指",
     tech: ["MediaPipe Hands", "getUserMedia", "Canvas 2D", "Verlet 物理"],
     principle: [
       "MediaPipe 手部模型即時取得五根指尖位置與深度",
-      "每條文字繩由多個 Verlet 節點組成，固定端跟隨指尖，重力與距離約束產生下垂和甩動",
+      "每條文字繩由多個 Verlet 節點組成；單手固定中段、雙手固定兩端，重力與距離約束產生下垂和甩動",
       "沿繩子弧長循環排字，並用手指深度近似判斷前後遮擋"
     ],
     requirements: ["攝影機", "建議 Chrome / Edge", "舊機器 fps 較低", "需經 start.bat 或 HTTPS 開啟"],

@@ -8,6 +8,8 @@ const textInput = document.createElement("input");
 
 const errorMessage = "請允許攝影機權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
 const fingerTips = [4, 8, 12, 16, 20];
+// 各指第二指節（拇指 IP、其餘 PIP）——單手時文字繩對折掛在這裡，而非指尖
+const secondKnuckles = [3, 6, 10, 14, 18];
 const nodeCount = 22;
 const constraintIterations = 8;
 
@@ -20,8 +22,10 @@ const state = {
   ropes: new Map(),
   text: "互動設計實驗",
   fontSize: 24,
+  weight: 600,
   color: "#ffffff",
-  tightness: 1
+  tightness: 1,
+  gravity: 1.4
 };
 
 canvas.style.position = "absolute";
@@ -82,6 +86,19 @@ shell.addParam({
 });
 
 shell.addParam({
+  key: "weight",
+  type: "range",
+  label: "字的粗細",
+  min: 300,
+  max: 900,
+  step: 100,
+  value: state.weight,
+  onChange(value) {
+    state.weight = value;
+  }
+});
+
+shell.addParam({
   key: "tightness",
   type: "range",
   label: "字的緊密度",
@@ -91,6 +108,19 @@ shell.addParam({
   value: state.tightness,
   onChange(value) {
     state.tightness = value;
+  }
+});
+
+shell.addParam({
+  key: "gravity",
+  type: "range",
+  label: "重力",
+  min: 0.4,
+  max: 3,
+  step: 0.1,
+  value: state.gravity,
+  onChange(value) {
+    state.gravity = value;
   }
 });
 
@@ -142,17 +172,29 @@ function makeNode(x, y) {
   return { x, y, px: x, py: y, fixed: false };
 }
 
-function makeRope(key, anchors, totalLength) {
+function makeRope(key, pins, totalLength) {
   const nodes = [];
-  const start = anchors[0];
-  const end = anchors[1] || { x: start.x, y: start.y + totalLength };
-  for (let i = 0; i < nodeCount; i += 1) {
-    const t = i / (nodeCount - 1);
-    const x = start.x + (end.x - start.x) * t;
-    // 初始略向下放，避免雙手繩剛出現時完全筆直。
-    const y = start.y + (end.y - start.y) * t + Math.sin(t * Math.PI) * totalLength * 0.08;
-    nodes.push(makeNode(x, y));
+
+  if (pins.length === 1) {
+    const pin = pins[0];
+    const restLength = totalLength / (nodeCount - 1);
+    for (let i = 0; i < nodeCount; i += 1) {
+      const offset = i - pin.index;
+      const swing = Math.sin(i * 0.7) * restLength * 0.12;
+      nodes.push(makeNode(pin.point.x + swing, pin.point.y + offset * restLength));
+    }
+  } else {
+    const start = pins[0].point;
+    const end = pins[pins.length - 1].point;
+    for (let i = 0; i < nodeCount; i += 1) {
+      const t = i / (nodeCount - 1);
+      const x = start.x + (end.x - start.x) * t;
+      // 初始略向下放，避免雙手繩剛出現時完全筆直。
+      const y = start.y + (end.y - start.y) * t + Math.sin(t * Math.PI) * totalLength * 0.08;
+      nodes.push(makeNode(x, y));
+    }
   }
+
   return { key, nodes, restLength: totalLength / (nodeCount - 1), depth: 0, occluders: [] };
 }
 
@@ -165,7 +207,7 @@ function setFixedNode(node, point) {
 }
 
 function integrate(rope) {
-  const gravity = clamp(state.height / 720, 0.7, 1.7) * 0.55;
+  const gravity = state.gravity * clamp(state.height / 720, 0.7, 1.7);
   for (const node of rope.nodes) {
     if (node.fixed) {
       continue;
@@ -207,21 +249,21 @@ function satisfyConstraints(rope) {
   }
 }
 
-function updateRope(key, anchors, totalLength, depth, occluders) {
+function updateRope(key, pins, totalLength, depth, occluders) {
   let rope = state.ropes.get(key);
   if (!rope || Math.abs(rope.nodes.length * rope.restLength - totalLength) > state.height * 0.18) {
-    rope = makeRope(key, anchors, totalLength);
+    rope = makeRope(key, pins, totalLength);
     state.ropes.set(key, rope);
   }
 
   rope.restLength = totalLength / (nodeCount - 1);
   rope.depth = depth;
   rope.occluders = occluders;
-  setFixedNode(rope.nodes[0], anchors[0]);
-  if (anchors[1]) {
-    setFixedNode(rope.nodes[rope.nodes.length - 1], anchors[1]);
-  } else {
-    rope.nodes[rope.nodes.length - 1].fixed = false;
+  for (const node of rope.nodes) {
+    node.fixed = false;
+  }
+  for (const pin of pins) {
+    setFixedNode(rope.nodes[pin.index], pin.point);
   }
 
   integrate(rope);
@@ -240,13 +282,14 @@ function buildRopeSpecs(hands) {
   if (hands.length === 1) {
     const hand = hands[0];
     return fingerTips.map((tipIndex, fingerIndex) => {
-      const start = hand.points[tipIndex];
+      // 掛點＝第二指節：繩子對折搭在手指上、兩端下垂（而不是從指尖垂下）
+      const drape = hand.points[secondKnuckles[fingerIndex]];
       return {
         key: `single-${hand.id}-${tipIndex}`,
-        anchors: [start],
-        totalLength: state.height * 0.42,
-        depth: start.z,
-        occluders: getOccluders(hand, fingerIndex, start.z)
+        pins: [{ index: Math.floor(nodeCount / 2), point: drape }],
+        totalLength: state.height * 0.52,
+        depth: drape.z,
+        occluders: getOccluders(hand, fingerIndex, drape.z)
       };
     });
   }
@@ -259,8 +302,11 @@ function buildRopeSpecs(hands) {
       const ropeDepth = (start.z + end.z) * 0.5;
       return {
         key: `double-${tipIndex}`,
-        anchors: [start, end],
-        totalLength: Math.max(distance(start, end) * 1.15, state.width * 0.12),
+        pins: [
+          { index: 0, point: start },
+          { index: nodeCount - 1, point: end }
+        ],
+        totalLength: Math.max(distance(start, end) * 1.18, state.width * 0.12),
         depth: ropeDepth,
         occluders: [
           ...getOccluders(leftHand, fingerIndex, start.z),
@@ -320,7 +366,7 @@ function drawTextRope(rope) {
   }
 
   context.save();
-  context.font = `600 ${state.fontSize}px 'Noto Sans TC', 'Microsoft JhengHei', sans-serif`;
+  context.font = `${state.weight} ${state.fontSize}px 'Noto Sans TC', 'Microsoft JhengHei', sans-serif`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillStyle = state.color;
@@ -375,7 +421,7 @@ function updateAndDrawRopes() {
   }
 
   const ropes = specs
-    .map((spec) => updateRope(spec.key, spec.anchors, spec.totalLength, spec.depth, spec.occluders))
+    .map((spec) => updateRope(spec.key, spec.pins, spec.totalLength, spec.depth, spec.occluders))
     .sort((a, b) => b.depth - a.depth);
 
   for (const rope of ropes) {
