@@ -8,13 +8,6 @@ const textInput = document.createElement("input");
 
 const errorMessage = "請允許攝影機權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
 const fingerTips = [4, 8, 12, 16, 20];
-const fingerChains = [
-  [0, 1, 2, 3, 4],
-  [0, 5, 6, 7, 8],
-  [0, 9, 10, 11, 12],
-  [0, 13, 14, 15, 16],
-  [0, 17, 18, 19, 20]
-];
 const nodeCount = 22;
 const constraintIterations = 8;
 
@@ -22,19 +15,16 @@ const state = {
   width: 1,
   height: 1,
   lastVideoTime: -1,
-  lastFrameTime: 0,
-  lastMode: "none",
+  hasVideoFrame: false,
   animationId: 0,
   hands: [],
   ropes: new Map(),
-  beads: new Map(),
-  beadCharIndices: new Map(),
-  tipVelocities: new Map(),
   text: "互動設計實驗",
   fontSize: 24,
-  weight: 600,
+  weight: 6,
   color: "#ffffff",
   tightness: 1,
+  ropeLength: 0.45,
   gravity: 1.4
 };
 
@@ -86,6 +76,19 @@ shell.addParam({
 });
 
 shell.addParam({
+  key: "weight",
+  type: "range",
+  label: "字的粗細",
+  min: 1,
+  max: 10,
+  step: 1,
+  value: state.weight,
+  onChange(value) {
+    state.weight = value;
+  }
+});
+
+shell.addParam({
   key: "color",
   type: "color",
   label: "字的顏色",
@@ -96,28 +99,28 @@ shell.addParam({
 });
 
 shell.addParam({
-  key: "weight",
-  type: "range",
-  label: "字的粗細",
-  min: 300,
-  max: 900,
-  step: 100,
-  value: state.weight,
-  onChange(value) {
-    state.weight = value;
-  }
-});
-
-shell.addParam({
   key: "tightness",
   type: "range",
   label: "字的緊密度",
-  min: 0.6,
-  max: 1.8,
+  min: 0.4,
+  max: 3,
   step: 0.05,
   value: state.tightness,
   onChange(value) {
     state.tightness = value;
+  }
+});
+
+shell.addParam({
+  key: "ropeLength",
+  type: "range",
+  label: "文字繩長度",
+  min: 0.2,
+  max: 0.9,
+  step: 0.05,
+  value: state.ropeLength,
+  onChange(value) {
+    state.ropeLength = value;
   }
 });
 
@@ -186,13 +189,22 @@ function makeRope(key, pins, totalLength) {
   const nodes = [];
 
   const start = pins[0].point;
-  const end = pins[pins.length - 1].point;
-  for (let i = 0; i < nodeCount; i += 1) {
-    const t = i / (nodeCount - 1);
-    const x = start.x + (end.x - start.x) * t;
-    // 初始略向下放，避免雙手繩剛出現時完全筆直。
-    const y = start.y + (end.y - start.y) * t + Math.sin(t * Math.PI) * totalLength * 0.08;
-    nodes.push(makeNode(x, y));
+  if (pins.length === 1) {
+    const restLength = totalLength / (nodeCount - 1);
+    for (let i = 0; i < nodeCount; i += 1) {
+      // 單手一端固定，初始往下排開可避免所有節點擠在指尖造成第一幀爆衝。
+      const sway = Math.sin(i * 0.9 + key.length) * restLength * 0.18;
+      nodes.push(makeNode(start.x + sway, start.y + i * restLength));
+    }
+  } else {
+    const end = pins[pins.length - 1].point;
+    for (let i = 0; i < nodeCount; i += 1) {
+      const t = i / (nodeCount - 1);
+      const x = start.x + (end.x - start.x) * t;
+      // 初始略向下放，避免雙手繩剛出現時完全筆直。
+      const y = start.y + (end.y - start.y) * t + Math.sin(t * Math.PI) * totalLength * 0.08;
+      nodes.push(makeNode(x, y));
+    }
   }
 
   return { key, nodes, restLength: totalLength / (nodeCount - 1), depth: 0, occluders: [] };
@@ -279,6 +291,20 @@ function getOccluders(hand, fingerIndex, depth) {
 }
 
 function buildRopeSpecs(hands) {
+  if (hands.length === 1) {
+    const [hand] = hands;
+    return fingerTips.map((tipIndex, fingerIndex) => {
+      const tip = hand.points[tipIndex];
+      return {
+        key: `single-${hand.id}-${tipIndex}`,
+        pins: [{ index: 0, point: tip }],
+        totalLength: state.height * state.ropeLength,
+        depth: tip.z,
+        occluders: getOccluders(hand, fingerIndex, tip.z)
+      };
+    });
+  }
+
   if (hands.length >= 2) {
     const [leftHand, rightHand] = hands;
     return fingerTips.map((tipIndex, fingerIndex) => {
@@ -351,10 +377,15 @@ function drawTextRope(rope) {
   }
 
   context.save();
-  context.font = `${state.weight} ${state.fontSize}px 'Noto Sans TC', 'Microsoft JhengHei', sans-serif`;
+  const fontWeight = clamp(Math.round(100 + state.weight * 90), 100, 900);
+  const strokeWidth = Math.max(0, state.weight - 6) * 0.8;
+  context.font = `${fontWeight} ${state.fontSize}px 'Noto Sans TC', 'Microsoft JhengHei', sans-serif`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillStyle = state.color;
+  context.strokeStyle = state.color;
+  context.lineWidth = strokeWidth;
+  context.lineJoin = "round";
   context.shadowColor = "rgba(0, 0, 0, 0.55)";
   context.shadowBlur = 6;
 
@@ -368,154 +399,14 @@ function drawTextRope(rope) {
       context.save();
       context.translate(point.x, point.y);
       context.rotate(point.angle);
+      if (strokeWidth > 0) {
+        context.strokeText(char, 0, 0);
+      }
       context.fillText(char, 0, 0);
       context.restore();
     }
     cursor += spacing;
     textIndex += 1;
-  }
-
-  context.restore();
-}
-
-function clearSingleHandState() {
-  state.beads.clear();
-  state.beadCharIndices.clear();
-  state.tipVelocities.clear();
-}
-
-function getNextBeadChar(key, text) {
-  const index = state.beadCharIndices.get(key) || 0;
-  state.beadCharIndices.set(key, index + 1);
-  return text[index % text.length];
-}
-
-function measureBeadSpacing(text) {
-  let total = 0;
-  for (const char of text) {
-    total += context.measureText(char).width;
-  }
-  return Math.max(state.fontSize * 0.6, (total / text.length) * state.tightness);
-}
-
-function syncMode(mode) {
-  if (state.lastMode !== mode) {
-    if (mode !== "single") {
-      clearSingleHandState();
-    }
-    if (mode !== "double") {
-      state.ropes.clear();
-    }
-    state.lastMode = mode;
-  }
-}
-
-function updateBeads(key, fingerIndex, spacing, totalLength, dt, text) {
-  let beads = state.beads.get(key);
-  if (!beads || beads.length === 0) {
-    const phase = fingerIndex * spacing * 0.2;
-    // 初始錯相是為了避免五根手指的字粒全擠在同一個手腕點。
-    beads = [{ s: phase, char: getNextBeadChar(key, text) }];
-    state.beads.set(key, beads);
-  }
-
-  const crawlSpeed = state.height * 0.12;
-  for (const bead of beads) {
-    bead.s += crawlSpeed * dt;
-  }
-
-  const nearestWrist = beads.reduce((min, bead) => Math.min(min, bead.s), Number.POSITIVE_INFINITY);
-  let nextS = nearestWrist;
-  while (nextS > spacing) {
-    nextS -= spacing;
-    beads.unshift({ s: nextS, char: getNextBeadChar(key, text) });
-  }
-
-  const alive = beads.filter((bead) => bead.s <= totalLength);
-  state.beads.set(key, alive);
-  return alive;
-}
-
-function updateTipVelocity(key, tip) {
-  const previous = state.tipVelocities.get(key) || { x: tip.x, vx: 0 };
-  const vx = previous.vx * 0.75 + (tip.x - previous.x) * 0.25;
-  state.tipVelocities.set(key, { x: tip.x, vx });
-  return vx;
-}
-
-function getDangleSway(handVelX, ds, dangleMax, time) {
-  const gravityFactor = clamp(state.gravity, 0.4, 3);
-  return Math.sin(time * 2 + ds * 0.03) * ds * 0.05 / gravityFactor
-    + handVelX * clamp(ds / dangleMax, 0, 1) * 6 / gravityFactor;
-}
-
-function drawSingleHandBeads(hand, dt) {
-  const text = state.text.trim() || "互動設計實驗";
-  const time = performance.now() * 0.001;
-  const dangleMax = state.height * 0.3;
-
-  context.save();
-  context.font = `${state.weight} ${state.fontSize}px 'Noto Sans TC', 'Microsoft JhengHei', sans-serif`;
-  context.textAlign = "center";
-  context.textBaseline = "middle";
-  context.fillStyle = state.color;
-  context.shadowColor = "rgba(0, 0, 0, 0.55)";
-  context.shadowBlur = 6;
-
-  const spacing = measureBeadSpacing(text);
-
-  for (const [fingerIndex, chain] of fingerChains.entries()) {
-    const key = `single-${hand.id}-${fingerIndex}`;
-    const points = chain.map((pointIndex) => hand.points[pointIndex]);
-    const tip = points[points.length - 1];
-    const polyline = getPolylineSamples(points);
-    const totalLength = polyline.total + dangleMax;
-    const occluders = getOccluders(hand, fingerIndex, tip.z);
-    const beads = updateBeads(key, fingerIndex, spacing, totalLength, dt, text);
-    const handVelX = updateTipVelocity(key, tip);
-
-    for (const bead of beads) {
-      let drawPoint = null;
-      let angle = Math.PI / 2;
-      let alpha = 1;
-      let onHand = false;
-
-      if (bead.s <= polyline.total) {
-        const point = pointAtLength(polyline, bead.s);
-        if (!point) {
-          continue;
-        }
-        // 法線波動讓字粒不是硬貼折線，而是有爬行的蠕動感。
-        const normal = { x: -Math.sin(point.angle), y: Math.cos(point.angle) };
-        const wig = Math.sin(bead.s * 0.05 - time * 6) * state.fontSize * 0.22;
-        drawPoint = {
-          x: point.x + normal.x * wig,
-          y: point.y + normal.y * wig
-        };
-        angle = point.angle;
-        onHand = true;
-      } else {
-        const ds = bead.s - polyline.total;
-        const fadeZone = dangleMax * 0.25;
-        const sway = getDangleSway(handVelX, ds, dangleMax, time);
-        drawPoint = {
-          x: tip.x + sway,
-          y: tip.y + ds
-        };
-        alpha = ds > dangleMax - fadeZone ? clamp((dangleMax - ds) / fadeZone, 0, 1) : 1;
-      }
-
-      if (!drawPoint || (onHand && isOccluded(drawPoint, occluders))) {
-        continue;
-      }
-
-      context.save();
-      context.globalAlpha = alpha;
-      context.translate(drawPoint.x, drawPoint.y);
-      context.rotate(angle);
-      context.fillText(bead.char, 0, 0);
-      context.restore();
-    }
   }
 
   context.restore();
@@ -538,20 +429,13 @@ function drawPrompt() {
   context.restore();
 }
 
-function updateAndDrawRopes(dt) {
+function updateAndDrawRopes() {
   if (state.hands.length === 0) {
-    syncMode("none");
+    pruneRopes(new Set());
     drawPrompt();
     return;
   }
 
-  if (state.hands.length === 1) {
-    syncMode("single");
-    drawSingleHandBeads(state.hands[0], dt);
-    return;
-  }
-
-  syncMode("double");
   const specs = buildRopeSpecs(state.hands);
   const activeKeys = new Set(specs.map((spec) => spec.key));
   pruneRopes(activeKeys);
@@ -572,16 +456,18 @@ function updateAndDrawRopes(dt) {
 
 function render(landmarker) {
   const now = performance.now();
-  const dt = state.lastFrameTime ? clamp((now - state.lastFrameTime) / 1000, 0, 0.05) : 0;
-  state.lastFrameTime = now;
   if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+    if (!state.hasVideoFrame) {
+      state.hasVideoFrame = true;
+      shell.hideLoading();
+    }
     drawMirroredVideo();
     if (video.currentTime !== state.lastVideoTime) {
       state.lastVideoTime = video.currentTime;
       const result = landmarker.detectForVideo(video, now);
       state.hands = (result.landmarks || []).map(analyzeHand);
     }
-    updateAndDrawRopes(dt);
+    updateAndDrawRopes();
   }
   state.animationId = window.requestAnimationFrame(() => render(landmarker));
 }
@@ -608,6 +494,7 @@ async function setupCamera() {
 
 async function start() {
   try {
+    shell.showLoading("正在開啟相機，請稍候…");
     resize();
     await setupCamera();
     const fileset = await FilesetResolver.forVisionTasks("../../libs/mediapipe/wasm");

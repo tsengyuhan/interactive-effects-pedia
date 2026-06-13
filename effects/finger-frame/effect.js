@@ -13,6 +13,7 @@ const state = {
   height: 1,
   ratio: 1,
   lastVideoTime: -1,
+  hasVideoFrame: false,
   animationId: 0,
   hands: [],
   smoothedCorners: null,
@@ -338,6 +339,10 @@ function updateFrame(hands, now) {
 function render(landmarker) {
   const now = performance.now();
   if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+    if (!state.hasVideoFrame) {
+      state.hasVideoFrame = true;
+      shell.hideLoading();
+    }
     drawMirroredVideo();
     if (video.currentTime !== state.lastVideoTime) {
       state.lastVideoTime = video.currentTime;
@@ -372,6 +377,7 @@ async function setupCamera() {
 
 async function start() {
   try {
+    shell.showLoading("正在開啟相機，請稍候…");
     resize();
     await setupCamera();
     const fileset = await FilesetResolver.forVisionTasks("../../libs/mediapipe/wasm");
