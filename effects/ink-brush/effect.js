@@ -165,13 +165,29 @@
       x,
       y,
       r: state.size * (0.34 + Math.random() * 0.18),
-      alpha: state.density * strength * 0.07,
+      alpha: state.density * strength * 0.12,
       lobes
     });
   }
 
-  // 把整條 pointer.points 當成一條平滑路徑描出來。每次都先清空再重畫，
-  // 所以同一筆畫內不會因相鄰段重疊而變暗（不會出現念珠顆粒）。
+  // 沿路徑蓋一顆柔邊墨點：中心濃、邊緣平滑淡出（這是原始版的水墨柔邊質感來源）
+  function stampSoft(ctx, x, y, radius, alpha) {
+    const color = hexToRgb(state.ink);
+    const a = clamp(alpha, 0, 1);
+    const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
+    // 中央保留一段實心平台讓墨色夠濃，再向外平滑羽化成柔邊（避免太淡或硬邊灰軌）
+    gradient.addColorStop(0, `rgba(${color.r}, ${color.g}, ${color.b}, ${a})`);
+    gradient.addColorStop(0.5, `rgba(${color.r}, ${color.g}, ${color.b}, ${a})`);
+    gradient.addColorStop(0.78, `rgba(${color.r}, ${color.g}, ${color.b}, ${clamp(a * 0.42, 0, 1)})`);
+    gradient.addColorStop(1, `rgba(${color.r}, ${color.g}, ${color.b}, 0)`);
+    ctx.fillStyle = gradient;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 把整條 pointer.points 沿路徑蓋密集柔邊墨點：每幀整條重畫，
+  // 重疊的柔邊互相累積成連貫且中央濃、邊緣自然暈散的筆跡（不會有黑芯+兩條灰軌、也無顆粒）。
   function drawActiveStroke() {
     clearStrokeLayer();
     const pts = pointer.points;
@@ -179,54 +195,29 @@
       return;
     }
 
-    const color = hexToRgb(state.ink);
-    const coreAlpha = clamp(0.32 + state.density * 0.55, 0, 1);
-    const haloAlpha = coreAlpha * 0.32;
-    const coreWidth = Math.max(1.6, state.size * 0.62);
-    const haloWidth = Math.max(2.6, state.size * 0.98);
+    const radius = state.size * 0.5;
+    // 沿線密集重疊累積出濃度；密度參數提高整體濃淡
+    const dabAlpha = clamp(0.12 + state.density * 0.2, 0, 1);
 
     if (pts.length === 1) {
-      // 單點輕觸：柔邊圓點
-      const p = pts[0];
-      const r = state.size * 0.52;
-      const gradient = strokeContext.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
-      gradient.addColorStop(0, `rgba(${color.r}, ${color.g}, ${color.b}, ${coreAlpha})`);
-      gradient.addColorStop(0.68, `rgba(${color.r}, ${color.g}, ${color.b}, ${coreAlpha * 0.5})`);
-      gradient.addColorStop(1, `rgba(${color.r}, ${color.g}, ${color.b}, 0)`);
-      strokeContext.fillStyle = gradient;
-      strokeContext.beginPath();
-      strokeContext.arc(p.x, p.y, r, 0, Math.PI * 2);
-      strokeContext.fill();
+      stampSoft(strokeContext, pts[0].x, pts[0].y, radius, clamp(dabAlpha * 1.8, 0, 1));
       return;
     }
 
-    function tracePath() {
-      strokeContext.beginPath();
-      strokeContext.moveTo(pts[0].x, pts[0].y);
-      // 以相鄰點的中點作為曲線端點、原始點作為控制點，串成連續平滑曲線
-      for (let i = 1; i < pts.length - 1; i += 1) {
-        const midX = (pts[i].x + pts[i + 1].x) * 0.5;
-        const midY = (pts[i].y + pts[i + 1].y) * 0.5;
-        strokeContext.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
+    let prev = pts[0];
+    stampSoft(strokeContext, prev.x, prev.y, radius, dabAlpha);
+    for (let i = 1; i < pts.length; i += 1) {
+      const point = pts[i];
+      // 相鄰取樣點之間再補插，使墨點間距夠密（約半徑的 1/4），疊出來才平滑連續
+      const dx = point.x - prev.x;
+      const dy = point.y - prev.y;
+      const distance = Math.hypot(dx, dy);
+      const sub = Math.max(1, Math.ceil(distance / Math.max(1, radius * 0.25)));
+      for (let s = 1; s <= sub; s += 1) {
+        stampSoft(strokeContext, prev.x + dx * s / sub, prev.y + dy * s / sub, radius, dabAlpha);
       }
-      const last = pts[pts.length - 1];
-      strokeContext.lineTo(last.x, last.y);
+      prev = point;
     }
-
-    strokeContext.lineCap = "round";
-    strokeContext.lineJoin = "round";
-
-    // 外圈柔邊（整條描一次）
-    strokeContext.strokeStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${haloAlpha})`;
-    strokeContext.lineWidth = haloWidth;
-    tracePath();
-    strokeContext.stroke();
-
-    // 內芯主體（整條描一次）→ 中央較濃、邊緣柔，且全程連續無顆粒
-    strokeContext.strokeStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${coreAlpha})`;
-    strokeContext.lineWidth = coreWidth;
-    tracePath();
-    strokeContext.stroke();
   }
 
   // 收筆：把完成的筆畫整條疊進墨層（與即時顯示同為 source-over，外觀不跳動）
@@ -283,7 +274,8 @@
     }
 
     inkContext.save();
-    inkContext.globalCompositeOperation = "multiply";
+    // 暈染與筆跡同樣用 source-over 疊在墨層，兩者才會自然融在一起、不會有明顯分隔
+    inkContext.globalCompositeOperation = "source-over";
     for (let index = bleeds.length - 1; index >= 0; index -= 1) {
       const bleed = bleeds[index];
       bleed.r += 0.22 + state.bleed * 1.7;
@@ -346,9 +338,9 @@
       });
     }
     const speed = distance / Math.max(1, now - pointer.time);
-    // 慢筆才偶爾在落點加暈染，快筆保持乾淨線條
-    if (speed < 0.22 && Math.random() < 0.22 + state.bleed * 0.3) {
-      addBleed(point.x, point.y, 0.5);
+    // 沿整條筆畫都產生暈染（慢筆滲得更開），讓墨跡邊緣有水墨化開的感覺
+    if (Math.random() < 0.12 + state.bleed * 0.3) {
+      addBleed(point.x, point.y, speed < 0.22 ? 0.85 : 0.5);
     }
     pointer.x = point.x;
     pointer.y = point.y;
