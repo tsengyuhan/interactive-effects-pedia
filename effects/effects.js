@@ -66,21 +66,5 @@ window.EFFECTS = [
     offline: true,
     offlineNote: "",
     hasParams: false
-  },
-  {
-    id: "_smoke",
-    title: "外殼煙霧測試",
-    category: "網頁互動",
-    description: "驗證共用外殼、資訊面板、參數與錯誤蓋版是否正常運作",
-    instructions: "移動滑鼠或手指觀察圓形位置；調整半徑與顏色後會即時套用",
-    tech: ["Canvas 2D", "Shell API"],
-    principle: [
-      "共用外殼從中央登錄檔讀取效果資料並建立資訊面板",
-      "效果程式只負責畫面與互動，參數控制交給 Shell API 注入"
-    ],
-    requirements: ["滑鼠或觸控螢幕", "任何現代瀏覽器"],
-    offline: true,
-    offlineNote: "",
-    hasParams: true
   }
 ];
