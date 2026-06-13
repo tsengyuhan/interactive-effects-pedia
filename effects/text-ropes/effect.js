@@ -8,20 +8,28 @@ const textInput = document.createElement("input");
 
 const errorMessage = "請允許攝影機權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
 const fingerTips = [4, 8, 12, 16, 20];
-// 各指第二指節（拇指 IP、其餘 PIP）——單手時文字繩對折掛在手指肚附近，而非指尖
-const secondKnuckles = [3, 6, 10, 14, 18];
-const fingerMcps = [2, 5, 9, 13, 17];
+const fingerChains = [
+  [0, 1, 2, 3, 4],
+  [0, 5, 6, 7, 8],
+  [0, 9, 10, 11, 12],
+  [0, 13, 14, 15, 16],
+  [0, 17, 18, 19, 20]
+];
 const nodeCount = 22;
 const constraintIterations = 8;
-const foldBand = 0.06;
 
 const state = {
   width: 1,
   height: 1,
   lastVideoTime: -1,
+  lastFrameTime: 0,
+  lastMode: "none",
   animationId: 0,
   hands: [],
   ropes: new Map(),
+  beads: new Map(),
+  beadCharIndices: new Map(),
+  tipVelocities: new Map(),
   text: "互動設計實驗",
   fontSize: 24,
   weight: 600,
@@ -146,52 +154,6 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-function lerpPoint(a, b, t) {
-  return {
-    x: a.x + (b.x - a.x) * t,
-    y: a.y + (b.y - a.y) * t,
-    z: a.z + (b.z - a.z) * t
-  };
-}
-
-function normalize2D(vector, fallback = { x: 0, y: 1 }) {
-  const length = Math.hypot(vector.x, vector.y);
-  if (length < 0.0001) {
-    return fallback;
-  }
-  return { x: vector.x / length, y: vector.y / length };
-}
-
-function normalize3D(vector) {
-  const length = Math.hypot(vector.x, vector.y, vector.z);
-  if (length < 0.0001) {
-    return { x: 0, y: 0, z: 1 };
-  }
-  return { x: vector.x / length, y: vector.y / length, z: vector.z / length };
-}
-
-function cross3D(a, b) {
-  return {
-    x: a.y * b.z - a.z * b.y,
-    y: a.z * b.x - a.x * b.z,
-    z: a.x * b.y - a.y * b.x
-  };
-}
-
-function pointToSegmentDistance(point, a, b) {
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const lengthSquared = dx * dx + dy * dy;
-  if (lengthSquared < 0.0001) {
-    return distance(point, a);
-  }
-  const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared, 0, 1);
-  return distance(point, {
-    x: a.x + dx * t,
-    y: a.y + dy * t
-  });
-}
-
 function mirrorPoint(point) {
   return {
     x: (1 - point.x) * state.width,
@@ -223,27 +185,17 @@ function makeNode(x, y) {
 function makeRope(key, pins, totalLength) {
   const nodes = [];
 
-  if (pins.length === 1) {
-    const pin = pins[0];
-    const restLength = totalLength / (nodeCount - 1);
-    for (let i = 0; i < nodeCount; i += 1) {
-      const offset = i - pin.index;
-      const swing = Math.sin(i * 0.7) * restLength * 0.12;
-      nodes.push(makeNode(pin.point.x + swing, pin.point.y + offset * restLength));
-    }
-  } else {
-    const start = pins[0].point;
-    const end = pins[pins.length - 1].point;
-    for (let i = 0; i < nodeCount; i += 1) {
-      const t = i / (nodeCount - 1);
-      const x = start.x + (end.x - start.x) * t;
-      // 初始略向下放，避免雙手繩剛出現時完全筆直。
-      const y = start.y + (end.y - start.y) * t + Math.sin(t * Math.PI) * totalLength * 0.08;
-      nodes.push(makeNode(x, y));
-    }
+  const start = pins[0].point;
+  const end = pins[pins.length - 1].point;
+  for (let i = 0; i < nodeCount; i += 1) {
+    const t = i / (nodeCount - 1);
+    const x = start.x + (end.x - start.x) * t;
+    // 初始略向下放，避免雙手繩剛出現時完全筆直。
+    const y = start.y + (end.y - start.y) * t + Math.sin(t * Math.PI) * totalLength * 0.08;
+    nodes.push(makeNode(x, y));
   }
 
-  return { key, nodes, restLength: totalLength / (nodeCount - 1), depth: 0, occluders: [], drape: null };
+  return { key, nodes, restLength: totalLength / (nodeCount - 1), depth: 0, occluders: [] };
 }
 
 function setFixedNode(node, point) {
@@ -297,7 +249,7 @@ function satisfyConstraints(rope) {
   }
 }
 
-function updateRope(key, pins, totalLength, depth, occluders, drape = null) {
+function updateRope(key, pins, totalLength, depth, occluders) {
   let rope = state.ropes.get(key);
   if (!rope || Math.abs(rope.nodes.length * rope.restLength - totalLength) > state.height * 0.18) {
     rope = makeRope(key, pins, totalLength);
@@ -307,7 +259,6 @@ function updateRope(key, pins, totalLength, depth, occluders, drape = null) {
   rope.restLength = totalLength / (nodeCount - 1);
   rope.depth = depth;
   rope.occluders = occluders;
-  rope.drape = drape;
   for (const node of rope.nodes) {
     node.fixed = false;
   }
@@ -320,47 +271,6 @@ function updateRope(key, pins, totalLength, depth, occluders, drape = null) {
   return rope;
 }
 
-function getPalmNormal(hand) {
-  const toNormalized3D = (point) => ({
-    x: point.x / state.width,
-    y: point.y / state.height,
-    z: point.z
-  });
-  const wrist = toNormalized3D(hand.points[0]);
-  const indexMcp = toNormalized3D(hand.points[5]);
-  const pinkyMcp = toNormalized3D(hand.points[17]);
-  const v1 = {
-    x: indexMcp.x - wrist.x,
-    y: indexMcp.y - wrist.y,
-    z: indexMcp.z - wrist.z
-  };
-  const v2 = {
-    x: pinkyMcp.x - wrist.x,
-    y: pinkyMcp.y - wrist.y,
-    z: pinkyMcp.z - wrist.z
-  };
-  return normalize3D(cross3D(v1, v2));
-}
-
-function getDrapeSpec(hand, fingerIndex, knuckle, tip) {
-  const axis = normalize2D({ x: tip.x - knuckle.x, y: tip.y - knuckle.y });
-  const perp = { x: -axis.y, y: axis.x };
-  const normal = getPalmNormal(hand);
-  const tiltSigned = normal.x * perp.x + normal.y * perp.y;
-  const fingerWidth = distance(hand.points[0], hand.points[9]) * 0.2;
-  const sep = fingerWidth * clamp(0.25 + Math.abs(tiltSigned) * 2.5, 0.25, 1.6);
-
-  return {
-    perp,
-    sep,
-    frontSign: tiltSigned >= 0 ? 1 : -1,
-    mcp: hand.points[fingerMcps[fingerIndex]],
-    tip,
-    fingerWidth,
-    foldT: 0.5
-  };
-}
-
 function getOccluders(hand, fingerIndex, depth) {
   const radius = clamp(state.fontSize * 1.25, 18, 58);
   return fingerTips
@@ -369,25 +279,6 @@ function getOccluders(hand, fingerIndex, depth) {
 }
 
 function buildRopeSpecs(hands) {
-  if (hands.length === 1) {
-    const hand = hands[0];
-    return fingerTips.map((tipIndex, fingerIndex) => {
-      const knuckle = hand.points[secondKnuckles[fingerIndex]];
-      const tip = hand.points[tipIndex];
-      // 掛點往指尖微移，讓彎折視覺落在手指肚上，比釘在關節更像被手指托住。
-      const drapePoint = lerpPoint(knuckle, tip, 0.35);
-      const drape = getDrapeSpec(hand, fingerIndex, knuckle, tip);
-      return {
-        key: `single-${hand.id}-${tipIndex}`,
-        pins: [{ index: Math.floor(nodeCount / 2), point: drapePoint }],
-        totalLength: state.height * 0.52,
-        depth: drapePoint.z,
-        occluders: getOccluders(hand, fingerIndex, drapePoint.z),
-        drape
-      };
-    });
-  }
-
   if (hands.length >= 2) {
     const [leftHand, rightHand] = hands;
     return fingerTips.map((tipIndex, fingerIndex) => {
@@ -452,22 +343,6 @@ function isOccluded(point, occluders) {
   return occluders.some((occluder) => distance(point, occluder.point) < occluder.radius);
 }
 
-function getDrapeDrawState(point, cursor, polyline, drape) {
-  const half = cursor / polyline.total;
-  const d = half - drape.foldT;
-  const ramp = clamp(Math.abs(d) / 0.5, 0, 1);
-  const side = d >= 0 ? drape.frontSign : -drape.frontSign;
-  return {
-    d,
-    x: point.x + drape.perp.x * drape.sep * ramp * side,
-    y: point.y + drape.perp.y * drape.sep * ramp * side
-  };
-}
-
-function isInsideOwnFinger(point, drape) {
-  return pointToSegmentDistance(point, drape.mcp, drape.tip) < drape.fingerWidth * 0.6;
-}
-
 function drawTextRope(rope) {
   const text = state.text.trim() || "互動設計實驗";
   const polyline = getPolylineSamples(rope.nodes);
@@ -483,43 +358,164 @@ function drawTextRope(rope) {
   context.shadowColor = "rgba(0, 0, 0, 0.55)";
   context.shadowBlur = 6;
 
-  const drawPass = (pass) => {
-    let textIndex = 0;
-    let cursor = state.fontSize * 0.45;
-    while (cursor < polyline.total) {
-      const char = text[textIndex % text.length];
-      const spacing = Math.max(state.fontSize * 0.55, context.measureText(char).width * state.tightness);
-      const point = pointAtLength(polyline, cursor);
-      if (point) {
-        const drapeState = rope.drape ? getDrapeDrawState(point, cursor, polyline, rope.drape) : null;
-        const isBack = drapeState ? drapeState.d < -foldBand : false;
-        const shouldDraw = pass === "all" || (pass === "back" ? isBack : !isBack);
-        const drawPoint = drapeState ? { x: drapeState.x, y: drapeState.y } : point;
-        const blockedByOwnFinger = rope.drape && isBack && isInsideOwnFinger(drawPoint, rope.drape);
-
-        if (shouldDraw && !blockedByOwnFinger && !isOccluded(drawPoint, rope.occluders)) {
-          context.save();
-          context.globalAlpha = isBack ? 0.5 : 1;
-          context.translate(drawPoint.x, drawPoint.y);
-          context.rotate(point.angle);
-          // 後段縮小並先畫，讓前段有明確壓在手指上方的層次。
-          if (isBack) {
-            context.scale(0.9, 0.9);
-          }
-          context.fillText(char, 0, 0);
-          context.restore();
-        }
-      }
-      cursor += spacing;
-      textIndex += 1;
+  let textIndex = 0;
+  let cursor = state.fontSize * 0.45;
+  while (cursor < polyline.total) {
+    const char = text[textIndex % text.length];
+    const spacing = Math.max(state.fontSize * 0.55, context.measureText(char).width * state.tightness);
+    const point = pointAtLength(polyline, cursor);
+    if (point && !isOccluded(point, rope.occluders)) {
+      context.save();
+      context.translate(point.x, point.y);
+      context.rotate(point.angle);
+      context.fillText(char, 0, 0);
+      context.restore();
     }
-  };
+    cursor += spacing;
+    textIndex += 1;
+  }
 
-  if (rope.drape) {
-    drawPass("back");
-    drawPass("front");
-  } else {
-    drawPass("all");
+  context.restore();
+}
+
+function clearSingleHandState() {
+  state.beads.clear();
+  state.beadCharIndices.clear();
+  state.tipVelocities.clear();
+}
+
+function getNextBeadChar(key, text) {
+  const index = state.beadCharIndices.get(key) || 0;
+  state.beadCharIndices.set(key, index + 1);
+  return text[index % text.length];
+}
+
+function measureBeadSpacing(text) {
+  let total = 0;
+  for (const char of text) {
+    total += context.measureText(char).width;
+  }
+  return Math.max(state.fontSize * 0.6, (total / text.length) * state.tightness);
+}
+
+function syncMode(mode) {
+  if (state.lastMode !== mode) {
+    if (mode !== "single") {
+      clearSingleHandState();
+    }
+    if (mode !== "double") {
+      state.ropes.clear();
+    }
+    state.lastMode = mode;
+  }
+}
+
+function updateBeads(key, fingerIndex, spacing, totalLength, dt, text) {
+  let beads = state.beads.get(key);
+  if (!beads || beads.length === 0) {
+    const phase = fingerIndex * spacing * 0.2;
+    // 初始錯相是為了避免五根手指的字粒全擠在同一個手腕點。
+    beads = [{ s: phase, char: getNextBeadChar(key, text) }];
+    state.beads.set(key, beads);
+  }
+
+  const crawlSpeed = state.height * 0.12;
+  for (const bead of beads) {
+    bead.s += crawlSpeed * dt;
+  }
+
+  const nearestWrist = beads.reduce((min, bead) => Math.min(min, bead.s), Number.POSITIVE_INFINITY);
+  let nextS = nearestWrist;
+  while (nextS > spacing) {
+    nextS -= spacing;
+    beads.unshift({ s: nextS, char: getNextBeadChar(key, text) });
+  }
+
+  const alive = beads.filter((bead) => bead.s <= totalLength);
+  state.beads.set(key, alive);
+  return alive;
+}
+
+function updateTipVelocity(key, tip) {
+  const previous = state.tipVelocities.get(key) || { x: tip.x, vx: 0 };
+  const vx = previous.vx * 0.75 + (tip.x - previous.x) * 0.25;
+  state.tipVelocities.set(key, { x: tip.x, vx });
+  return vx;
+}
+
+function getDangleSway(handVelX, ds, dangleMax, time) {
+  const gravityFactor = clamp(state.gravity, 0.4, 3);
+  return Math.sin(time * 2 + ds * 0.03) * ds * 0.05 / gravityFactor
+    + handVelX * clamp(ds / dangleMax, 0, 1) * 6 / gravityFactor;
+}
+
+function drawSingleHandBeads(hand, dt) {
+  const text = state.text.trim() || "互動設計實驗";
+  const time = performance.now() * 0.001;
+  const dangleMax = state.height * 0.3;
+
+  context.save();
+  context.font = `${state.weight} ${state.fontSize}px 'Noto Sans TC', 'Microsoft JhengHei', sans-serif`;
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  context.fillStyle = state.color;
+  context.shadowColor = "rgba(0, 0, 0, 0.55)";
+  context.shadowBlur = 6;
+
+  const spacing = measureBeadSpacing(text);
+
+  for (const [fingerIndex, chain] of fingerChains.entries()) {
+    const key = `single-${hand.id}-${fingerIndex}`;
+    const points = chain.map((pointIndex) => hand.points[pointIndex]);
+    const tip = points[points.length - 1];
+    const polyline = getPolylineSamples(points);
+    const totalLength = polyline.total + dangleMax;
+    const occluders = getOccluders(hand, fingerIndex, tip.z);
+    const beads = updateBeads(key, fingerIndex, spacing, totalLength, dt, text);
+    const handVelX = updateTipVelocity(key, tip);
+
+    for (const bead of beads) {
+      let drawPoint = null;
+      let angle = Math.PI / 2;
+      let alpha = 1;
+      let onHand = false;
+
+      if (bead.s <= polyline.total) {
+        const point = pointAtLength(polyline, bead.s);
+        if (!point) {
+          continue;
+        }
+        // 法線波動讓字粒不是硬貼折線，而是有爬行的蠕動感。
+        const normal = { x: -Math.sin(point.angle), y: Math.cos(point.angle) };
+        const wig = Math.sin(bead.s * 0.05 - time * 6) * state.fontSize * 0.22;
+        drawPoint = {
+          x: point.x + normal.x * wig,
+          y: point.y + normal.y * wig
+        };
+        angle = point.angle;
+        onHand = true;
+      } else {
+        const ds = bead.s - polyline.total;
+        const fadeZone = dangleMax * 0.25;
+        const sway = getDangleSway(handVelX, ds, dangleMax, time);
+        drawPoint = {
+          x: tip.x + sway,
+          y: tip.y + ds
+        };
+        alpha = ds > dangleMax - fadeZone ? clamp((dangleMax - ds) / fadeZone, 0, 1) : 1;
+      }
+
+      if (!drawPoint || (onHand && isOccluded(drawPoint, occluders))) {
+        continue;
+      }
+
+      context.save();
+      context.globalAlpha = alpha;
+      context.translate(drawPoint.x, drawPoint.y);
+      context.rotate(angle);
+      context.fillText(bead.char, 0, 0);
+      context.restore();
+    }
   }
 
   context.restore();
@@ -542,7 +538,20 @@ function drawPrompt() {
   context.restore();
 }
 
-function updateAndDrawRopes() {
+function updateAndDrawRopes(dt) {
+  if (state.hands.length === 0) {
+    syncMode("none");
+    drawPrompt();
+    return;
+  }
+
+  if (state.hands.length === 1) {
+    syncMode("single");
+    drawSingleHandBeads(state.hands[0], dt);
+    return;
+  }
+
+  syncMode("double");
   const specs = buildRopeSpecs(state.hands);
   const activeKeys = new Set(specs.map((spec) => spec.key));
   pruneRopes(activeKeys);
@@ -553,7 +562,7 @@ function updateAndDrawRopes() {
   }
 
   const ropes = specs
-    .map((spec) => updateRope(spec.key, spec.pins, spec.totalLength, spec.depth, spec.occluders, spec.drape))
+    .map((spec) => updateRope(spec.key, spec.pins, spec.totalLength, spec.depth, spec.occluders))
     .sort((a, b) => b.depth - a.depth);
 
   for (const rope of ropes) {
@@ -563,6 +572,8 @@ function updateAndDrawRopes() {
 
 function render(landmarker) {
   const now = performance.now();
+  const dt = state.lastFrameTime ? clamp((now - state.lastFrameTime) / 1000, 0, 0.05) : 0;
+  state.lastFrameTime = now;
   if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
     drawMirroredVideo();
     if (video.currentTime !== state.lastVideoTime) {
@@ -570,7 +581,7 @@ function render(landmarker) {
       const result = landmarker.detectForVideo(video, now);
       state.hands = (result.landmarks || []).map(analyzeHand);
     }
-    updateAndDrawRopes();
+    updateAndDrawRopes(dt);
   }
   state.animationId = window.requestAnimationFrame(() => render(landmarker));
 }
