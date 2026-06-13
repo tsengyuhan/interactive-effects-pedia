@@ -6,6 +6,7 @@ const context = canvas.getContext("2d", { willReadFrequently: true });
 const video = document.createElement("video");
 
 const state = {
+  tolerance: 50,
   mode: "invert",
   blockSize: 16,
   width: 1,
@@ -41,6 +42,19 @@ video.style.display = "none";
 shell.container.style.overflow = "hidden";
 shell.container.style.background = "#05070a";
 shell.container.append(video, canvas);
+
+shell.addParam({
+  type: "range",
+  key: "tolerance",
+  label: "手勢寬鬆度",
+  min: 20,
+  max: 70,
+  step: 1,
+  value: state.tolerance,
+  onChange(value) {
+    state.tolerance = value;
+  }
+});
 
 shell.addParam({
   type: "select",
@@ -115,10 +129,11 @@ function analyzeHand(landmarks) {
   const v1 = subtract(p4, p2);
   const v2 = subtract(p8, p5);
   const theta = angleBetween(v1, v2);
+  const valid = Math.abs(theta - 90) <= state.tolerance;
 
   return {
     points,
-    valid: theta >= 65 && theta <= 115,
+    valid,
     corner: {
       x: (p2.x + p5.x) * 0.5,
       y: (p2.y + p5.y) * 0.5
@@ -363,7 +378,10 @@ async function start() {
     const landmarker = await HandLandmarker.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: "../../libs/mediapipe/hand_landmarker.task" },
       runningMode: "VIDEO",
-      numHands: 2
+      numHands: 2,
+      minHandDetectionConfidence: 0.3,
+      minHandPresenceConfidence: 0.3,
+      minTrackingConfidence: 0.3
     });
     render(landmarker);
   } catch (error) {

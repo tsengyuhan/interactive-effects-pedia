@@ -25,8 +25,8 @@ window.EFFECTS = [
     tech: ["Canvas 2D"],
     principle: [
       "用程式雜訊產生宣紙紋理當底",
-      "筆畫由連續蓋印的半透明墨點組成，移動速度決定墨點的濃淡與密度",
-      "落筆處登記為「暈染點」，逐幀向外擴張、透明度遞減，模擬墨水滲入紙纖維"
+      "筆畫由連續蓋印的不規則半透明墨點組成，移動速度決定墨點的濃淡與密度",
+      "落筆處登記為「暈染點」，以多個偏移子瓣柔和擴張，模擬墨水滲入紙纖維"
     ],
     requirements: ["滑鼠或觸控螢幕", "任何現代瀏覽器", "無特殊效能需求"],
     offline: true,
@@ -55,16 +55,16 @@ window.EFFECTS = [
     title: "聲音漣漪",
     category: "聲音互動",
     description: "對著麥克風發出聲音，池塘水面會泛起大小與餘波不同的漣漪",
-    instructions: "對麥克風說話、拍手或哼聲；聲音越大漣漪越大，音高決定餘波長短",
+    instructions: "對麥克風說話、拍手或哼聲；聲音越大漣漪越大，音高越高水滴越靠上方",
     tech: ["Web Audio API", "Canvas 2D", "高度場水波模擬"],
     principle: [
       "麥克風訊號經 AnalyserNode 取出波形，算 RMS 得音量，自相關法估音高",
       "水面是一張高度場網格，每幀由鄰格高度差傳遞波動，自然產生干涉與反彈",
-      "音量決定投入水面的能量（漣漪大小），音高調整衰減率（餘波長短）"
+      "音量決定投入水面的能量（漣漪大小），音高調整落點高度與衰減率（餘波長短）"
     ],
     requirements: ["麥克風", "建議 Chrome / Edge", "需經 start.bat 或 HTTPS 開啟"],
     offline: true,
     offlineNote: "",
-    hasParams: false
+    hasParams: true
   }
 ];

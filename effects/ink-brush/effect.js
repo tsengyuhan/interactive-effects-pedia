@@ -132,25 +132,59 @@
   }
 
   function stamp(x, y, radius, alpha) {
-    const gradient = inkContext.createRadialGradient(x, y, 0, x, y, radius);
+    const points = [];
+    const count = 8 + Math.floor(Math.random() * 5);
+    const start = Math.random() * Math.PI * 2;
+    for (let i = 0; i < count; i += 1) {
+      const angle = start + i / count * Math.PI * 2;
+      const wobble = 0.7 + Math.random() * 0.6;
+      points.push({
+        x: x + Math.cos(angle) * radius * wobble,
+        y: y + Math.sin(angle) * radius * wobble
+      });
+    }
+
+    const gradient = inkContext.createRadialGradient(x, y, 0, x, y, radius * 1.25);
     gradient.addColorStop(0, rgba(alpha));
-    gradient.addColorStop(0.42, rgba(alpha * 0.68));
+    gradient.addColorStop(0.32, rgba(alpha * 0.76));
+    gradient.addColorStop(0.62, rgba(alpha * 0.34));
+    gradient.addColorStop(0.86, rgba(alpha * 0.08));
     gradient.addColorStop(1, rgba(0));
     inkContext.save();
     inkContext.globalCompositeOperation = "multiply";
     inkContext.fillStyle = gradient;
     inkContext.beginPath();
-    inkContext.arc(x, y, radius, 0, Math.PI * 2);
+    inkContext.moveTo(points[0].x, points[0].y);
+    for (let i = 0; i < points.length; i += 1) {
+      const current = points[i];
+      const next = points[(i + 1) % points.length];
+      inkContext.quadraticCurveTo(current.x, current.y, (current.x + next.x) * 0.5, (current.y + next.y) * 0.5);
+    }
+    inkContext.closePath();
     inkContext.fill();
     inkContext.restore();
   }
 
   function addBleed(x, y, strength) {
+    const lobeCount = 3 + Math.floor(Math.random() * 3);
+    const lobes = [];
+    for (let i = 0; i < lobeCount; i += 1) {
+      const angle = Math.random() * Math.PI * 2;
+      const distance = state.size * (0.06 + Math.random() * 0.16);
+      lobes.push({
+        x: Math.cos(angle) * distance,
+        y: Math.sin(angle) * distance,
+        r: 0.78 + Math.random() * 0.54,
+        grow: 0.74 + Math.random() * 0.58,
+        alpha: 0.72 + Math.random() * 0.42
+      });
+    }
     bleeds.push({
       x,
       y,
       r: state.size * (0.34 + Math.random() * 0.18),
-      alpha: state.density * strength * 0.11
+      alpha: state.density * strength * 0.07,
+      lobes
     });
   }
 
@@ -214,14 +248,23 @@
       const bleed = bleeds[index];
       bleed.r += 0.22 + state.bleed * 1.7;
       bleed.alpha *= 0.92;
-      const gradient = inkContext.createRadialGradient(bleed.x, bleed.y, 0, bleed.x, bleed.y, bleed.r);
-      gradient.addColorStop(0, rgba(bleed.alpha * 0.42));
-      gradient.addColorStop(0.62, rgba(bleed.alpha * 0.18));
-      gradient.addColorStop(1, rgba(0));
-      inkContext.fillStyle = gradient;
-      inkContext.beginPath();
-      inkContext.arc(bleed.x, bleed.y, bleed.r, 0, Math.PI * 2);
-      inkContext.fill();
+      for (const lobe of bleed.lobes) {
+        // 以多個偏移子瓣累積暈染，避免單一同心圓造成硬邊。
+        const spread = state.bleed * bleed.r * 0.16;
+        const lobeX = bleed.x + lobe.x + Math.sign(lobe.x || 1) * spread * lobe.grow;
+        const lobeY = bleed.y + lobe.y + Math.sign(lobe.y || 1) * spread * lobe.grow;
+        const lobeRadius = bleed.r * lobe.r;
+        const gradient = inkContext.createRadialGradient(lobeX, lobeY, 0, lobeX, lobeY, lobeRadius);
+        gradient.addColorStop(0, rgba(bleed.alpha * lobe.alpha * 0.3));
+        gradient.addColorStop(0.28, rgba(bleed.alpha * lobe.alpha * 0.19));
+        gradient.addColorStop(0.56, rgba(bleed.alpha * lobe.alpha * 0.1));
+        gradient.addColorStop(0.82, rgba(bleed.alpha * lobe.alpha * 0.035));
+        gradient.addColorStop(1, rgba(0));
+        inkContext.fillStyle = gradient;
+        inkContext.beginPath();
+        inkContext.arc(lobeX, lobeY, lobeRadius, 0, Math.PI * 2);
+        inkContext.fill();
+      }
       if (bleed.alpha < 0.005) {
         bleeds.splice(index, 1);
       }

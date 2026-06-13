@@ -20,6 +20,9 @@
     pitchConfidence: 0,
     lastDropTime: 0
   };
+  const state = {
+    threshold: -30
+  };
 
   const water = {
     scale: 4,
@@ -56,9 +59,22 @@
   meter.style.font = "14px/1.45 'Noto Sans TC', 'Microsoft JhengHei', sans-serif";
   meter.style.backdropFilter = "blur(14px)";
 
-  shell.container.style.background = "#031012";
+  shell.container.style.background = "#0d3b46";
   shell.container.append(canvas, meter);
   context.imageSmoothingEnabled = true;
+
+  shell.addParam({
+    type: "range",
+    key: "threshold",
+    label: "觸發音量",
+    min: -50,
+    max: -10,
+    step: 1,
+    value: state.threshold,
+    onChange(value) {
+      state.threshold = value;
+    }
+  });
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -119,13 +135,15 @@
   }
 
   function maybeDrop(now) {
-    if (audioState.db <= -45 || now - audioState.lastDropTime < 80) {
+    if (audioState.db <= state.threshold || now - audioState.lastDropTime < 80) {
       return;
     }
-    const power = normalize(audioState.db, -45, 0);
+    const power = normalize(audioState.db, state.threshold, 0);
     const x = clamp(water.width * (0.5 + gaussian() * 0.18), 2, water.width - 3);
-    const y = clamp(water.height * (0.5 + gaussian() * 0.18), 2, water.height - 3);
-    addDrop(x, y, lerp(3.5, 13, power), lerp(90, 420, power));
+    const pitchAmount = audioState.pitch ? normalize(audioState.pitch, 60, 1200) : 0.5;
+    const targetY = lerp(water.height * 0.78, water.height * 0.22, pitchAmount);
+    const y = clamp(targetY + gaussian() * water.height * 0.04, 2, water.height - 3);
+    addDrop(x, y, lerp(4, 22, power), lerp(130, 680, power));
     audioState.lastDropTime = now;
   }
 
@@ -173,7 +191,7 @@
     const h = water.height;
     const field = water.previous;
     const data = water.image.data;
-    const base = { r: 8, g: 62, b: 68 };
+    const base = { r: 34, g: 120, b: 140 };
 
     for (let y = 0; y < h; y += 1) {
       const ym = clamp(y - 1, 0, h - 1);
@@ -187,9 +205,9 @@
         const shade = clamp(0.5 + gx * 0.018 + gy * 0.024, 0, 1);
         const bend = clamp((gx - gy) * 0.018, -18, 18);
         const p = i * 4;
-        data[p] = clamp(base.r + shade * 42 + bend, 0, 255);
-        data[p + 1] = clamp(base.g + shade * 86 + bend * 0.7, 0, 255);
-        data[p + 2] = clamp(base.b + shade * 76 - bend * 0.35, 0, 255);
+        data[p] = clamp(base.r + shade * 50 + bend, 0, 255);
+        data[p + 1] = clamp(base.g + shade * 95 + bend * 0.7, 0, 255);
+        data[p + 2] = clamp(base.b + shade * 88 - bend * 0.35, 0, 255);
         data[p + 3] = 255;
       }
     }
@@ -257,13 +275,14 @@
   function updateMeter() {
     const dbText = `${audioState.db.toFixed(1)} dB`;
     const pitchText = audioState.pitch ? `${Math.round(audioState.pitch)} Hz` : "—";
-    const volumeAmount = normalize(audioState.db, -60, 0) * 100;
+    const volumeAmount = normalize(audioState.db, state.threshold, 0) * 100;
     const pitchAmount = audioState.pitch ? normalize(audioState.pitch, 60, 1200) * 100 : 0;
     meter.innerHTML = [
       `<div style="display:flex;justify-content:space-between;gap:12px"><span>音量</span><strong>${dbText}</strong></div>`,
       `<div style="height:8px;margin:7px 0 12px;border-radius:999px;background:rgba(255,255,255,.14);overflow:hidden"><div style="height:100%;width:${volumeAmount}%;background:#7ee3d5"></div></div>`,
       `<div style="display:flex;justify-content:space-between;gap:12px"><span>音高</span><strong>${pitchText}</strong></div>`,
-      `<div style="height:8px;margin-top:7px;border-radius:999px;background:rgba(255,255,255,.14);overflow:hidden"><div style="height:100%;width:${pitchAmount}%;background:#d6e77a"></div></div>`
+      `<div style="height:8px;margin-top:7px;border-radius:999px;background:rgba(255,255,255,.14);overflow:hidden"><div style="height:100%;width:${pitchAmount}%;background:#d6e77a"></div></div>`,
+      `<div style="margin-top:10px;color:rgba(238,248,242,.78);font-size:12px">音量→大小，音高→高低位置</div>`
     ].join("");
   }
 

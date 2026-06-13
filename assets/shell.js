@@ -54,6 +54,8 @@ Shell API 用法
   "use strict";
 
   const APP_TITLE = "互動效果百科";
+  // 效果原始碼在 GitHub 的資料夾位置；資訊面板據此產生「在 GitHub 查看原始碼」連結
+  const REPO_EFFECTS_BASE = "https://github.com/tsengyuhan/interactive-effects-pedia/tree/master/effects";
 
   function createElement(tag, className, text) {
     const element = document.createElement(tag);
@@ -167,6 +169,11 @@ Shell API 用法
     const status = createElement("div", "shell-status-row");
     status.append(createBadge(effect));
 
+    const source = createElement("a", "shell-source-link", "在 GitHub 查看原始碼");
+    source.href = `${REPO_EFFECTS_BASE}/${effect.id}`;
+    source.target = "_blank";
+    source.rel = "noopener noreferrer";
+
     setChildren(drawer, [
       paramsSection,
       header,
@@ -176,7 +183,8 @@ Shell API 用法
       tech,
       principle,
       requirements,
-      status
+      status,
+      source
     ]);
 
     document.body.append(container, back, actions, toast, drawer);
@@ -202,6 +210,9 @@ Shell API 用法
     close.addEventListener("click", () => {
       setPanelOpen(false);
     });
+
+    // 預設展開資訊面板，讓使用者一進來就看到操作說明與參數（會一併收掉吐司）
+    setPanelOpen(true);
 
     function addParam(config) {
       const item = createElement("label", "shell-param");

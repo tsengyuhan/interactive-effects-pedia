@@ -287,6 +287,30 @@ select {
   margin-top: 16px;
 }
 
+.shell-source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 16px;
+  border: 1px solid var(--shell-line);
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--shell-text);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+
+.shell-source-link::before {
+  content: "↗";
+  color: var(--shell-accent);
+}
+
+.shell-source-link:hover {
+  border-color: rgba(111, 214, 201, 0.58);
+  background: rgba(28, 40, 44, 0.82);
+}
+
 .shell-error-overlay {
   inset: 0;
   z-index: 30;
