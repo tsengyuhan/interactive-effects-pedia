@@ -4,3 +4,5 @@ Desktop.ini
 # 隊長/工人協作的暫存檔，不發布
 .claude/
 team/
+# 工人跑測試留下的產物
+test-results/
