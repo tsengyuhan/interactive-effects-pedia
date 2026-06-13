@@ -80,7 +80,7 @@ shell.addParam({
   key: "cell",
   label: "格子大小",
   min: 10,
-  max: 36,
+  max: 40,
   step: 1,
   value: state.cell,
   onChange(value) {
@@ -104,6 +104,11 @@ shell.addParam({
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function smoothstep(edge0, edge1, value) {
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
 }
 
 function hashRandom(seed) {
@@ -267,6 +272,7 @@ function updateFineSketch(mask) {
   const out = finePixelCtx.createImageData(state.fineW, state.fineH);
   const dst = out.data;
   const lum = new Float32Array(state.fineW * state.fineH);
+  const smooth = new Float32Array(state.fineW * state.fineH);
   const cover = new Float32Array(state.fineW * state.fineH);
 
   for (let y = 0; y < state.fineH; y += 1) {
@@ -280,21 +286,54 @@ function updateFineSketch(mask) {
 
   for (let y = 0; y < state.fineH; y += 1) {
     for (let x = 0; x < state.fineW; x += 1) {
+      let sum = 0;
+      let weight = 0;
+
+      for (let oy = -1; oy <= 1; oy += 1) {
+        const yy = clamp(y + oy, 0, state.fineH - 1);
+        for (let ox = -1; ox <= 1; ox += 1) {
+          const xx = clamp(x + ox, 0, state.fineW - 1);
+          const w = (ox === 0 && oy === 0) ? 4 : ((ox === 0 || oy === 0) ? 2 : 1);
+          sum += lum[yy * state.fineW + xx] * w;
+          weight += w;
+        }
+      }
+
+      smooth[y * state.fineW + x] = sum / weight;
+    }
+  }
+
+  for (let y = 0; y < state.fineH; y += 1) {
+    for (let x = 0; x < state.fineW; x += 1) {
       const idx = y * state.fineW + x;
-      const right = lum[y * state.fineW + Math.min(state.fineW - 1, x + 1)];
-      const down = lum[Math.min(state.fineH - 1, y + 1) * state.fineW + x];
-      const maskRight = cover[y * state.fineW + Math.min(state.fineW - 1, x + 1)];
-      const maskDown = cover[Math.min(state.fineH - 1, y + 1) * state.fineW + x];
-      const edge = clamp(Math.abs(lum[idx] - right) * 3.2 + Math.abs(lum[idx] - down) * 3.2 + Math.abs(cover[idx] - maskRight) * 1.5 + Math.abs(cover[idx] - maskDown) * 1.5, 0, 1);
-      const grain = hashRandom(idx * 0.77) - 0.5;
-      const diagonal = ((x + y * 2) % 7 === 0) ? 0.08 : 0;
-      const shade = cover[idx] * clamp((1 - lum[idx]) * 0.72 + edge * 0.85 + diagonal + grain * 0.08, 0, 1);
-      const value = Math.round(242 - shade * 168);
+      const x0 = Math.max(0, x - 1);
+      const x1 = Math.min(state.fineW - 1, x + 1);
+      const y0 = Math.max(0, y - 1);
+      const y1 = Math.min(state.fineH - 1, y + 1);
+      const tl = smooth[y0 * state.fineW + x0];
+      const tc = smooth[y0 * state.fineW + x];
+      const tr = smooth[y0 * state.fineW + x1];
+      const ml = smooth[y * state.fineW + x0];
+      const mr = smooth[y * state.fineW + x1];
+      const bl = smooth[y1 * state.fineW + x0];
+      const bc = smooth[y1 * state.fineW + x];
+      const br = smooth[y1 * state.fineW + x1];
+      const gx = -tl - ml * 2 - bl + tr + mr * 2 + br;
+      const gy = -tl - tc * 2 - tr + bl + bc * 2 + br;
+      const imageEdge = smoothstep(0.08, 0.27, Math.sqrt(gx * gx + gy * gy));
+      const maskEdge = smoothstep(0.035, 0.22, Math.max(
+        Math.abs(cover[idx] - cover[y * state.fineW + x0]),
+        Math.abs(cover[idx] - cover[y * state.fineW + x1]),
+        Math.abs(cover[idx] - cover[y0 * state.fineW + x]),
+        Math.abs(cover[idx] - cover[y1 * state.fineW + x])
+      ));
+      const grain = 0.94 + hashRandom(idx * 0.77) * 0.12;
+      const line = clamp(Math.max(imageEdge * 0.9, maskEdge) * cover[idx] * grain, 0, 1);
       const p = idx * 4;
-      dst[p] = value;
-      dst[p + 1] = value;
-      dst[p + 2] = value;
-      dst[p + 3] = Math.round(clamp(cover[idx] * (0.18 + shade * 1.25), 0, 1) * 255);
+      dst[p] = 40;
+      dst[p + 1] = 37;
+      dst[p + 2] = 31;
+      dst[p + 3] = Math.round(line * 230);
     }
   }
 
@@ -302,19 +341,6 @@ function updateFineSketch(mask) {
   fineCtx.save();
   fineCtx.imageSmoothingEnabled = true;
   fineCtx.drawImage(finePixelCanvas, 0, 0, state.width, state.height);
-  fineCtx.restore();
-
-  fineCtx.save();
-  fineCtx.globalCompositeOperation = "multiply";
-  fineCtx.strokeStyle = "rgba(42, 38, 32, 0.08)";
-  fineCtx.lineWidth = 1;
-  const gap = Math.max(7, state.cell * 0.55);
-  fineCtx.beginPath();
-  for (let y = -state.height; y < state.height * 2; y += gap) {
-    fineCtx.moveTo(0, y);
-    fineCtx.lineTo(state.width, y + state.width * 0.38);
-  }
-  fineCtx.stroke();
   fineCtx.restore();
 }
 
