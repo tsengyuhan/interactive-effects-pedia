@@ -83,5 +83,22 @@ window.EFFECTS = [
     offline: true,
     offlineNote: "",
     hasParams: true
+  },
+  {
+    id: "sketch-portrait",
+    title: "草稿紙人像",
+    category: "身體動作",
+    description: "webcam 把人去背後畫在方格稿紙上，鉛筆塗陰影排出人像；拖曳格線可撕開稿紙偷看真實畫面",
+    instructions: "面對鏡頭，人像會以鉛筆交叉線畫滿稿紙格子；在畫面上按住格線往左右或上下拖曳，稿紙會沿那條線撕開一條縫，露出真實鏡頭畫面，放開後自動闔上。可調整格子大小與線條濃度",
+    tech: ["MediaPipe Image Segmenter", "getUserMedia", "Canvas 2D"],
+    principle: [
+      "人像分割模型即時把人從背景切出，只有人的區域會被作畫",
+      "畫面縮到格子解析度取每格明暗，越暗的格子疊越多層鉛筆交叉線（亮部留淡影讓輪廓成形）",
+      "撕縫時把格線兩側的稿紙往兩邊錯開，中間缺口露出底下的真實鏡頭畫面"
+    ],
+    requirements: ["攝影機", "建議 Chrome / Edge", "舊機器 fps 較低", "需經 start.bat 或 HTTPS 開啟"],
+    offline: true,
+    offlineNote: "",
+    hasParams: true
   }
 ];
