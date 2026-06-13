@@ -4,9 +4,13 @@
   const shell = Shell.init({ id: "ink-brush" });
   const paperCanvas = document.createElement("canvas");
   const inkCanvas = document.createElement("canvas");
+  // 當前筆畫獨立一層：每幀把「整條」路徑重畫一次，避免一段段描邊在接點處
+  // 用 multiply 疊出念珠狀顆粒；收筆才整條疊進墨層。
+  const strokeCanvas = document.createElement("canvas");
   const inputCanvas = document.createElement("canvas");
   const paperContext = paperCanvas.getContext("2d");
   const inkContext = inkCanvas.getContext("2d");
+  const strokeContext = strokeCanvas.getContext("2d");
   const inputContext = inputCanvas.getContext("2d");
 
   const state = {
@@ -30,8 +34,9 @@
   let height = 1;
   let ratio = 1;
   let animationId = 0;
+  let strokeDirty = false;
 
-  for (const canvas of [paperCanvas, inkCanvas, inputCanvas]) {
+  for (const canvas of [paperCanvas, inkCanvas, strokeCanvas, inputCanvas]) {
     canvas.style.position = "absolute";
     canvas.style.inset = "0";
     canvas.style.width = "100%";
@@ -41,12 +46,14 @@
 
   paperCanvas.style.zIndex = "0";
   inkCanvas.style.zIndex = "1";
+  strokeCanvas.style.zIndex = "1";
+  strokeCanvas.style.pointerEvents = "none";
   inputCanvas.style.zIndex = "2";
   inputCanvas.style.touchAction = "none";
   inputContext.canvas.setAttribute("aria-label", "水墨筆觸畫布");
 
   shell.container.style.overflow = "hidden";
-  shell.container.append(paperCanvas, inkCanvas, inputCanvas);
+  shell.container.append(paperCanvas, inkCanvas, strokeCanvas, inputCanvas);
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
@@ -115,9 +122,16 @@
     paperContext.restore();
   }
 
+  function clearStrokeLayer() {
+    strokeContext.clearRect(0, 0, width, height);
+  }
+
   function clearInk() {
     bleeds.length = 0;
+    pointer.points = [];
+    strokeDirty = false;
     inkContext.clearRect(0, 0, width, height);
+    clearStrokeLayer();
   }
 
   function resize() {
@@ -126,44 +140,11 @@
     height = Math.max(1, shell.container.clientHeight || window.innerHeight);
     prepareCanvas(paperCanvas, paperContext);
     prepareCanvas(inkCanvas, inkContext);
+    prepareCanvas(strokeCanvas, strokeContext);
     prepareCanvas(inputCanvas, inputContext);
     drawPaper();
     // 尺寸改變時舊墨跡比例難以準確保留，清除可避免變形。
     clearInk();
-  }
-
-  function stamp(x, y, radius, alpha) {
-    const points = [];
-    const count = 8 + Math.floor(Math.random() * 5);
-    const start = Math.random() * Math.PI * 2;
-    for (let i = 0; i < count; i += 1) {
-      const angle = start + i / count * Math.PI * 2;
-      const wobble = 0.7 + Math.random() * 0.6;
-      points.push({
-        x: x + Math.cos(angle) * radius * wobble,
-        y: y + Math.sin(angle) * radius * wobble
-      });
-    }
-
-    const gradient = inkContext.createRadialGradient(x, y, 0, x, y, radius * 1.25);
-    gradient.addColorStop(0, rgba(alpha));
-    gradient.addColorStop(0.32, rgba(alpha * 0.76));
-    gradient.addColorStop(0.62, rgba(alpha * 0.34));
-    gradient.addColorStop(0.86, rgba(alpha * 0.08));
-    gradient.addColorStop(1, rgba(0));
-    inkContext.save();
-    inkContext.globalCompositeOperation = "multiply";
-    inkContext.fillStyle = gradient;
-    inkContext.beginPath();
-    inkContext.moveTo(points[0].x, points[0].y);
-    for (let i = 0; i < points.length; i += 1) {
-      const current = points[i];
-      const next = points[(i + 1) % points.length];
-      inkContext.quadraticCurveTo(current.x, current.y, (current.x + next.x) * 0.5, (current.y + next.y) * 0.5);
-    }
-    inkContext.closePath();
-    inkContext.fill();
-    inkContext.restore();
   }
 
   function addBleed(x, y, strength) {
@@ -189,87 +170,94 @@
     });
   }
 
-  function drawDryBrushStreaks(from, control, to, width, fast) {
-    if (fast < 0.18 || width < 8) {
+  // 把整條 pointer.points 當成一條平滑路徑描出來。每次都先清空再重畫，
+  // 所以同一筆畫內不會因相鄰段重疊而變暗（不會出現念珠顆粒）。
+  function drawActiveStroke() {
+    clearStrokeLayer();
+    const pts = pointer.points;
+    if (pts.length === 0) {
       return;
     }
-    const count = Math.floor(1 + fast * 4);
-    inkContext.save();
-    inkContext.globalCompositeOperation = "destination-out";
-    inkContext.lineCap = "round";
-    inkContext.lineJoin = "round";
-    inkContext.strokeStyle = `rgba(0, 0, 0, ${0.08 + fast * 0.08})`;
-    for (let i = 0; i < count; i += 1) {
-      const offset = (Math.random() - 0.5) * width * 0.55;
-      const jitter = (Math.random() - 0.5) * width * 0.16;
-      inkContext.beginPath();
-      inkContext.moveTo(from.x + offset, from.y + jitter);
-      inkContext.quadraticCurveTo(control.x + offset * 0.35, control.y - jitter, to.x + offset, to.y + jitter);
-      inkContext.lineWidth = Math.max(0.8, width * (0.025 + Math.random() * 0.035));
-      inkContext.stroke();
+
+    const color = hexToRgb(state.ink);
+    const coreAlpha = clamp(0.32 + state.density * 0.55, 0, 1);
+    const haloAlpha = coreAlpha * 0.32;
+    const coreWidth = Math.max(1.6, state.size * 0.62);
+    const haloWidth = Math.max(2.6, state.size * 0.98);
+
+    if (pts.length === 1) {
+      // 單點輕觸：柔邊圓點
+      const p = pts[0];
+      const r = state.size * 0.52;
+      const gradient = strokeContext.createRadialGradient(p.x, p.y, 0, p.x, p.y, r);
+      gradient.addColorStop(0, `rgba(${color.r}, ${color.g}, ${color.b}, ${coreAlpha})`);
+      gradient.addColorStop(0.68, `rgba(${color.r}, ${color.g}, ${color.b}, ${coreAlpha * 0.5})`);
+      gradient.addColorStop(1, `rgba(${color.r}, ${color.g}, ${color.b}, 0)`);
+      strokeContext.fillStyle = gradient;
+      strokeContext.beginPath();
+      strokeContext.arc(p.x, p.y, r, 0, Math.PI * 2);
+      strokeContext.fill();
+      return;
     }
-    inkContext.restore();
+
+    function tracePath() {
+      strokeContext.beginPath();
+      strokeContext.moveTo(pts[0].x, pts[0].y);
+      // 以相鄰點的中點作為曲線端點、原始點作為控制點，串成連續平滑曲線
+      for (let i = 1; i < pts.length - 1; i += 1) {
+        const midX = (pts[i].x + pts[i + 1].x) * 0.5;
+        const midY = (pts[i].y + pts[i + 1].y) * 0.5;
+        strokeContext.quadraticCurveTo(pts[i].x, pts[i].y, midX, midY);
+      }
+      const last = pts[pts.length - 1];
+      strokeContext.lineTo(last.x, last.y);
+    }
+
+    strokeContext.lineCap = "round";
+    strokeContext.lineJoin = "round";
+
+    // 外圈柔邊（整條描一次）
+    strokeContext.strokeStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${haloAlpha})`;
+    strokeContext.lineWidth = haloWidth;
+    tracePath();
+    strokeContext.stroke();
+
+    // 內芯主體（整條描一次）→ 中央較濃、邊緣柔，且全程連續無顆粒
+    strokeContext.strokeStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${coreAlpha})`;
+    strokeContext.lineWidth = coreWidth;
+    tracePath();
+    strokeContext.stroke();
   }
 
-  function drawStrokeSegment(point, elapsed) {
-    const points = pointer.points;
-    const previous = points[points.length - 1] || point;
-    const dx = point.x - previous.x;
-    const dy = point.y - previous.y;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    if (distance < 0.2) {
-      return;
+  // 收筆：把完成的筆畫整條疊進墨層（與即時顯示同為 source-over，外觀不跳動）
+  function commitStroke() {
+    if (pointer.points.length > 0) {
+      drawActiveStroke();
+      inkContext.save();
+      inkContext.setTransform(1, 0, 0, 1, 0, 0);
+      inkContext.globalCompositeOperation = "source-over";
+      inkContext.drawImage(strokeCanvas, 0, 0);
+      inkContext.restore();
     }
-    const speed = distance / Math.max(1, elapsed);
-    const fast = clamp((speed - 0.32) / 1.35, 0, 1);
-    const baseWidth = state.size * (0.72 - fast * 0.28);
-    const lineWidth = Math.max(1.4, baseWidth * (0.94 + Math.random() * 0.12));
-    const alpha = state.density * (0.3 - fast * 0.14);
-    let from = previous;
-    let control = previous;
-    let to = point;
+    clearStrokeLayer();
+    pointer.points = [];
+    strokeDirty = false;
+  }
 
-    if (points.length >= 2) {
-      const before = points[points.length - 2];
-      from = {
-        x: (before.x + previous.x) * 0.5,
-        y: (before.y + previous.y) * 0.5
-      };
-      control = previous;
-      to = {
-        x: (previous.x + point.x) * 0.5,
-        y: (previous.y + point.y) * 0.5
-      };
+  function appendPoint(point) {
+    pointer.points.push(point);
+    strokeDirty = true;
+    // 軟上限：避免單一超長筆畫無限累積，超過就先把目前段落烘進墨層、保留接點續畫
+    if (pointer.points.length > 400) {
+      const last = pointer.points[pointer.points.length - 1];
+      commitStroke();
+      pointer.points = [last];
     }
+  }
 
-    inkContext.save();
-    inkContext.globalCompositeOperation = "multiply";
-    inkContext.lineCap = "round";
-    inkContext.lineJoin = "round";
-    inkContext.strokeStyle = rgba(alpha);
-    inkContext.lineWidth = lineWidth;
-    inkContext.beginPath();
-    inkContext.moveTo(from.x, from.y);
-    inkContext.quadraticCurveTo(control.x, control.y, to.x, to.y);
-    inkContext.stroke();
-
-    inkContext.strokeStyle = rgba(alpha * 0.22);
-    inkContext.lineWidth = lineWidth * 1.32;
-    inkContext.beginPath();
-    inkContext.moveTo(from.x, from.y);
-    inkContext.quadraticCurveTo(control.x, control.y, to.x, to.y);
-    inkContext.stroke();
-    inkContext.restore();
-
-    drawDryBrushStreaks(from, control, to, lineWidth, fast);
-
-    if (speed < 0.22 && Math.random() < 0.25 + state.bleed * 0.35) {
-      addBleed(point.x, point.y, 0.55);
-    }
-    points.push(point);
-    if (points.length > 4) {
-      points.shift();
-    }
+  function finishStroke() {
+    pointer.active = false;
+    commitStroke();
   }
 
   function setPointerPosition(event) {
@@ -280,25 +268,18 @@
     };
   }
 
-  function endStroke(event) {
-    if (!pointer.active || event.pointerId !== pointer.id) {
-      return;
-    }
-    pointer.active = false;
-    try {
-      inputCanvas.releasePointerCapture(event.pointerId);
-    } catch (error) {
-      // 某些瀏覽器在指標已取消時會丟錯，忽略可維持收筆流程。
-    }
-  }
-
   function animate() {
     if (pointer.active) {
       pointer.stillFrames += 1;
-      if (pointer.stillFrames % 5 === 0) {
-        stamp(pointer.x, pointer.y, state.size * (0.48 + Math.random() * 0.08), state.density * 0.11);
-        addBleed(pointer.x, pointer.y, 0.9);
+      // 長按不動：持續加暈染點，模擬墨往紙纖維滲開（不再直接蓋深色墨塊）
+      if (pointer.stillFrames % 6 === 0) {
+        addBleed(pointer.x, pointer.y, 0.7);
       }
+    }
+
+    if (strokeDirty) {
+      drawActiveStroke();
+      strokeDirty = false;
     }
 
     inkContext.save();
@@ -342,9 +323,9 @@
     pointer.time = event.timeStamp || performance.now();
     pointer.stillFrames = 0;
     pointer.points = [point];
+    strokeDirty = true;
     inputCanvas.setPointerCapture(event.pointerId);
-    stamp(pointer.x, pointer.y, state.size * 0.5, state.density * 0.58);
-    addBleed(pointer.x, pointer.y, 0.8);
+    addBleed(point.x, point.y, 0.7);
   });
 
   inputCanvas.addEventListener("pointermove", (event) => {
@@ -356,12 +337,18 @@
     const dx = point.x - pointer.x;
     const dy = point.y - pointer.y;
     const distance = Math.hypot(dx, dy);
-    const steps = Math.max(1, Math.ceil(distance / Math.max(4, state.size * 0.22)));
+    // 事件取樣較疏時補插中間點，路徑才會平滑連續
+    const steps = Math.max(1, Math.ceil(distance / Math.max(3, state.size * 0.2)));
     for (let step = 1; step <= steps; step += 1) {
-      drawStrokeSegment({
+      appendPoint({
         x: pointer.x + dx * step / steps,
         y: pointer.y + dy * step / steps
-      }, (now - pointer.time) / steps);
+      });
+    }
+    const speed = distance / Math.max(1, now - pointer.time);
+    // 慢筆才偶爾在落點加暈染，快筆保持乾淨線條
+    if (speed < 0.22 && Math.random() < 0.22 + state.bleed * 0.3) {
+      addBleed(point.x, point.y, 0.5);
     }
     pointer.x = point.x;
     pointer.y = point.y;
@@ -369,10 +356,26 @@
     pointer.stillFrames = 0;
   });
 
-  inputCanvas.addEventListener("pointerup", endStroke);
-  inputCanvas.addEventListener("pointercancel", endStroke);
+  inputCanvas.addEventListener("pointerup", (event) => {
+    if (!pointer.active || event.pointerId !== pointer.id) {
+      return;
+    }
+    try {
+      inputCanvas.releasePointerCapture(event.pointerId);
+    } catch (error) {
+      // 某些瀏覽器在指標已取消時會丟錯，忽略可維持收筆流程。
+    }
+    finishStroke();
+  });
+
+  inputCanvas.addEventListener("pointercancel", () => {
+    finishStroke();
+  });
+
   inputCanvas.addEventListener("lostpointercapture", () => {
-    pointer.active = false;
+    if (pointer.active) {
+      finishStroke();
+    }
   });
 
   shell.addParam({
