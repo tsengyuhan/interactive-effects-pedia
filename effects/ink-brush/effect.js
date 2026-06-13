@@ -21,7 +21,8 @@
     x: 0,
     y: 0,
     time: 0,
-    stillFrames: 0
+    stillFrames: 0,
+    points: []
   };
   const bleeds = [];
 
@@ -188,28 +189,86 @@
     });
   }
 
-  function drawSegment(fromX, fromY, toX, toY, elapsed) {
-    const dx = toX - fromX;
-    const dy = toY - fromY;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-    const speed = distance / Math.max(1, elapsed);
-    const spacing = Math.max(1.5, state.size / 4);
-    const steps = Math.max(1, Math.ceil(distance / spacing));
-    const fast = clamp((speed - 0.32) / 1.35, 0, 1);
+  function drawDryBrushStreaks(from, control, to, width, fast) {
+    if (fast < 0.18 || width < 8) {
+      return;
+    }
+    const count = Math.floor(1 + fast * 4);
+    inkContext.save();
+    inkContext.globalCompositeOperation = "destination-out";
+    inkContext.lineCap = "round";
+    inkContext.lineJoin = "round";
+    inkContext.strokeStyle = `rgba(0, 0, 0, ${0.08 + fast * 0.08})`;
+    for (let i = 0; i < count; i += 1) {
+      const offset = (Math.random() - 0.5) * width * 0.55;
+      const jitter = (Math.random() - 0.5) * width * 0.16;
+      inkContext.beginPath();
+      inkContext.moveTo(from.x + offset, from.y + jitter);
+      inkContext.quadraticCurveTo(control.x + offset * 0.35, control.y - jitter, to.x + offset, to.y + jitter);
+      inkContext.lineWidth = Math.max(0.8, width * (0.025 + Math.random() * 0.035));
+      inkContext.stroke();
+    }
+    inkContext.restore();
+  }
 
-    for (let step = 1; step <= steps; step += 1) {
-      if (fast > 0 && Math.random() < fast * 0.45) {
-        continue;
-      }
-      const t = step / steps;
-      const x = fromX + dx * t + (Math.random() - 0.5) * state.size * 0.12;
-      const y = fromY + dy * t + (Math.random() - 0.5) * state.size * 0.12;
-      const alpha = state.density * (0.48 - fast * 0.28) * (0.78 + Math.random() * 0.28);
-      const radius = state.size * (0.46 - fast * 0.12) * (0.88 + Math.random() * 0.22);
-      stamp(x, y, radius, alpha);
-      if (speed < 0.22 && Math.random() < 0.45 + state.bleed * 0.4) {
-        addBleed(x, y, 0.65);
-      }
+  function drawStrokeSegment(point, elapsed) {
+    const points = pointer.points;
+    const previous = points[points.length - 1] || point;
+    const dx = point.x - previous.x;
+    const dy = point.y - previous.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    if (distance < 0.2) {
+      return;
+    }
+    const speed = distance / Math.max(1, elapsed);
+    const fast = clamp((speed - 0.32) / 1.35, 0, 1);
+    const baseWidth = state.size * (0.72 - fast * 0.28);
+    const lineWidth = Math.max(1.4, baseWidth * (0.94 + Math.random() * 0.12));
+    const alpha = state.density * (0.3 - fast * 0.14);
+    let from = previous;
+    let control = previous;
+    let to = point;
+
+    if (points.length >= 2) {
+      const before = points[points.length - 2];
+      from = {
+        x: (before.x + previous.x) * 0.5,
+        y: (before.y + previous.y) * 0.5
+      };
+      control = previous;
+      to = {
+        x: (previous.x + point.x) * 0.5,
+        y: (previous.y + point.y) * 0.5
+      };
+    }
+
+    inkContext.save();
+    inkContext.globalCompositeOperation = "multiply";
+    inkContext.lineCap = "round";
+    inkContext.lineJoin = "round";
+    inkContext.strokeStyle = rgba(alpha);
+    inkContext.lineWidth = lineWidth;
+    inkContext.beginPath();
+    inkContext.moveTo(from.x, from.y);
+    inkContext.quadraticCurveTo(control.x, control.y, to.x, to.y);
+    inkContext.stroke();
+
+    inkContext.strokeStyle = rgba(alpha * 0.22);
+    inkContext.lineWidth = lineWidth * 1.32;
+    inkContext.beginPath();
+    inkContext.moveTo(from.x, from.y);
+    inkContext.quadraticCurveTo(control.x, control.y, to.x, to.y);
+    inkContext.stroke();
+    inkContext.restore();
+
+    drawDryBrushStreaks(from, control, to, lineWidth, fast);
+
+    if (speed < 0.22 && Math.random() < 0.25 + state.bleed * 0.35) {
+      addBleed(point.x, point.y, 0.55);
+    }
+    points.push(point);
+    if (points.length > 4) {
+      points.shift();
     }
   }
 
@@ -282,6 +341,7 @@
     pointer.y = point.y;
     pointer.time = event.timeStamp || performance.now();
     pointer.stillFrames = 0;
+    pointer.points = [point];
     inputCanvas.setPointerCapture(event.pointerId);
     stamp(pointer.x, pointer.y, state.size * 0.5, state.density * 0.58);
     addBleed(pointer.x, pointer.y, 0.8);
@@ -293,7 +353,16 @@
     }
     const point = setPointerPosition(event);
     const now = event.timeStamp || performance.now();
-    drawSegment(pointer.x, pointer.y, point.x, point.y, now - pointer.time);
+    const dx = point.x - pointer.x;
+    const dy = point.y - pointer.y;
+    const distance = Math.hypot(dx, dy);
+    const steps = Math.max(1, Math.ceil(distance / Math.max(4, state.size * 0.22)));
+    for (let step = 1; step <= steps; step += 1) {
+      drawStrokeSegment({
+        x: pointer.x + dx * step / steps,
+        y: pointer.y + dy * step / steps
+      }, (now - pointer.time) / steps);
+    }
     pointer.x = point.x;
     pointer.y = point.y;
     pointer.time = now;

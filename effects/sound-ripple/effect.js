@@ -2,13 +2,16 @@
   "use strict";
 
   const shell = Shell.init({ id: "sound-ripple" });
+  const video = document.createElement("video");
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
+  const sourceCanvas = document.createElement("canvas");
+  const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
   const bufferCanvas = document.createElement("canvas");
   const bufferContext = bufferCanvas.getContext("2d", { willReadFrequently: true });
   const meter = document.createElement("div");
 
-  const errorMessage = "請允許麥克風權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
+  const errorMessage = "請允許攝影機與麥克風權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
   const audioState = {
     context: null,
     analyser: null,
@@ -18,19 +21,21 @@
     db: -60,
     pitch: null,
     pitchConfidence: 0,
-    lastDropTime: 0
+    lastDropTime: 0,
+    wasAboveThreshold: false
   };
   const state = {
     threshold: -30
   };
 
   const water = {
-    scale: 4,
+    scale: 2,
     width: 1,
     height: 1,
     previous: new Float32Array(1),
     current: new Float32Array(1),
     image: null,
+    sourceImage: null,
     damping: 0.985
   };
 
@@ -46,6 +51,11 @@
   canvas.style.height = "100%";
   canvas.style.display = "block";
 
+  video.autoplay = true;
+  video.muted = true;
+  video.playsInline = true;
+  video.style.display = "none";
+
   meter.style.position = "absolute";
   meter.style.left = "18px";
   meter.style.top = "70px";
@@ -60,7 +70,7 @@
   meter.style.backdropFilter = "blur(14px)";
 
   shell.container.style.background = "#0d3b46";
-  shell.container.append(canvas, meter);
+  shell.container.append(video, canvas, meter);
   context.imageSmoothingEnabled = true;
 
   shell.addParam({
@@ -99,6 +109,8 @@
     water.height = Math.max(2, Math.floor(display.height / water.scale));
     water.previous = new Float32Array(water.width * water.height);
     water.current = new Float32Array(water.width * water.height);
+    sourceCanvas.width = water.width;
+    sourceCanvas.height = water.height;
     bufferCanvas.width = water.width;
     bufferCanvas.height = water.height;
     water.image = bufferContext.createImageData(water.width, water.height);
@@ -135,7 +147,10 @@
   }
 
   function maybeDrop(now) {
-    if (audioState.db <= state.threshold || now - audioState.lastDropTime < 80) {
+    const aboveThreshold = audioState.db > state.threshold;
+    const isRisingEdge = aboveThreshold && !audioState.wasAboveThreshold;
+    audioState.wasAboveThreshold = aboveThreshold;
+    if (!isRisingEdge || now - audioState.lastDropTime < 120) {
       return;
     }
     const power = normalize(audioState.db, state.threshold, 0);
@@ -186,12 +201,29 @@
     water.current = previous;
   }
 
+  function drawCameraFrame() {
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0) {
+      sourceContext.save();
+      sourceContext.setTransform(-1, 0, 0, 1, water.width, 0);
+      sourceContext.drawImage(video, 0, 0, water.width, water.height);
+      sourceContext.restore();
+    } else {
+      const gradient = sourceContext.createLinearGradient(0, 0, water.width, water.height);
+      gradient.addColorStop(0, "#174d59");
+      gradient.addColorStop(1, "#0a1f28");
+      sourceContext.fillStyle = gradient;
+      sourceContext.fillRect(0, 0, water.width, water.height);
+    }
+    water.sourceImage = sourceContext.getImageData(0, 0, water.width, water.height);
+  }
+
   function renderWater() {
     const w = water.width;
     const h = water.height;
     const field = water.previous;
+    drawCameraFrame();
+    const source = water.sourceImage.data;
     const data = water.image.data;
-    const base = { r: 34, g: 120, b: 140 };
 
     for (let y = 0; y < h; y += 1) {
       const ym = clamp(y - 1, 0, h - 1);
@@ -202,12 +234,18 @@
         const i = y * w + x;
         const gx = field[y * w + xp] - field[y * w + xm];
         const gy = field[yp * w + x] - field[ym * w + x];
-        const shade = clamp(0.5 + gx * 0.018 + gy * 0.024, 0, 1);
-        const bend = clamp((gx - gy) * 0.018, -18, 18);
+        const offsetX = Math.round(clamp(gx * 0.035, -14, 14));
+        const offsetY = Math.round(clamp(gy * 0.035, -14, 14));
+        const sampleX = clamp(x + offsetX, 0, w - 1);
+        const sampleY = clamp(y + offsetY, 0, h - 1);
+        const sourceIndex = (sampleY * w + sampleX) * 4;
+        const gradientStrength = clamp(Math.abs(gx) * 0.012 + Math.abs(gy) * 0.012, 0, 1);
+        const shade = clamp(gy * 0.018 - gx * 0.01, -0.18, 0.34);
+        const highlight = gradientStrength * 54;
         const p = i * 4;
-        data[p] = clamp(base.r + shade * 50 + bend, 0, 255);
-        data[p + 1] = clamp(base.g + shade * 95 + bend * 0.7, 0, 255);
-        data[p + 2] = clamp(base.b + shade * 88 - bend * 0.35, 0, 255);
+        data[p] = clamp(source[sourceIndex] * 0.82 + 18 + shade * 70 + highlight, 0, 255);
+        data[p + 1] = clamp(source[sourceIndex + 1] * 0.88 + 34 + shade * 88 + highlight, 0, 255);
+        data[p + 2] = clamp(source[sourceIndex + 2] * 0.94 + 42 + shade * 98 + highlight * 1.15, 0, 255);
         data[p + 3] = 255;
       }
     }
@@ -302,7 +340,7 @@
     }
   }
 
-  async function setupAudio() {
+  async function setupMedia() {
     if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== "function") {
       throw new Error("mediaDevices unavailable");
     }
@@ -312,14 +350,23 @@
       throw new Error("AudioContext unavailable");
     }
 
-    const request = navigator.mediaDevices.getUserMedia({ audio: true });
+    const request = navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        facingMode: "user"
+      }
+    });
     const timeout = new Promise((resolve, reject) => {
       window.setTimeout(() => {
-        reject(new Error("microphone permission timeout"));
+        reject(new Error("camera or microphone permission timeout"));
       }, 20000);
     });
-    // Headless 或無麥克風環境可能讓權限請求懸置，逾時可避免只剩靜態畫面。
+    // Headless 或無裝置環境可能讓權限請求懸置，逾時可避免只剩靜態畫面。
     audioState.stream = await Promise.race([request, timeout]);
+    video.srcObject = audioState.stream;
+    await video.play();
     audioState.context = new AudioContextClass();
     const source = audioState.context.createMediaStreamSource(audioState.stream);
     audioState.analyser = audioState.context.createAnalyser();
@@ -347,7 +394,7 @@
       updateMeter();
       bindAudioResume();
       display.animationId = window.requestAnimationFrame(render);
-      await setupAudio();
+      await setupMedia();
     } catch (error) {
       console.error(error);
       shell.showError(errorMessage);
