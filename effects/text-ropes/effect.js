@@ -8,10 +8,12 @@ const textInput = document.createElement("input");
 
 const errorMessage = "請允許攝影機權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
 const fingerTips = [4, 8, 12, 16, 20];
-// 各指第二指節（拇指 IP、其餘 PIP）——單手時文字繩對折掛在這裡，而非指尖
+// 各指第二指節（拇指 IP、其餘 PIP）——單手時文字繩對折掛在手指肚附近，而非指尖
 const secondKnuckles = [3, 6, 10, 14, 18];
+const fingerMcps = [2, 5, 9, 13, 17];
 const nodeCount = 22;
 const constraintIterations = 8;
+const foldBand = 0.06;
 
 const state = {
   width: 1,
@@ -144,6 +146,52 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+function lerpPoint(a, b, t) {
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    z: a.z + (b.z - a.z) * t
+  };
+}
+
+function normalize2D(vector, fallback = { x: 0, y: 1 }) {
+  const length = Math.hypot(vector.x, vector.y);
+  if (length < 0.0001) {
+    return fallback;
+  }
+  return { x: vector.x / length, y: vector.y / length };
+}
+
+function normalize3D(vector) {
+  const length = Math.hypot(vector.x, vector.y, vector.z);
+  if (length < 0.0001) {
+    return { x: 0, y: 0, z: 1 };
+  }
+  return { x: vector.x / length, y: vector.y / length, z: vector.z / length };
+}
+
+function cross3D(a, b) {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x
+  };
+}
+
+function pointToSegmentDistance(point, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared < 0.0001) {
+    return distance(point, a);
+  }
+  const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared, 0, 1);
+  return distance(point, {
+    x: a.x + dx * t,
+    y: a.y + dy * t
+  });
+}
+
 function mirrorPoint(point) {
   return {
     x: (1 - point.x) * state.width,
@@ -195,7 +243,7 @@ function makeRope(key, pins, totalLength) {
     }
   }
 
-  return { key, nodes, restLength: totalLength / (nodeCount - 1), depth: 0, occluders: [] };
+  return { key, nodes, restLength: totalLength / (nodeCount - 1), depth: 0, occluders: [], drape: null };
 }
 
 function setFixedNode(node, point) {
@@ -249,7 +297,7 @@ function satisfyConstraints(rope) {
   }
 }
 
-function updateRope(key, pins, totalLength, depth, occluders) {
+function updateRope(key, pins, totalLength, depth, occluders, drape = null) {
   let rope = state.ropes.get(key);
   if (!rope || Math.abs(rope.nodes.length * rope.restLength - totalLength) > state.height * 0.18) {
     rope = makeRope(key, pins, totalLength);
@@ -259,6 +307,7 @@ function updateRope(key, pins, totalLength, depth, occluders) {
   rope.restLength = totalLength / (nodeCount - 1);
   rope.depth = depth;
   rope.occluders = occluders;
+  rope.drape = drape;
   for (const node of rope.nodes) {
     node.fixed = false;
   }
@@ -269,6 +318,47 @@ function updateRope(key, pins, totalLength, depth, occluders) {
   integrate(rope);
   satisfyConstraints(rope);
   return rope;
+}
+
+function getPalmNormal(hand) {
+  const toNormalized3D = (point) => ({
+    x: point.x / state.width,
+    y: point.y / state.height,
+    z: point.z
+  });
+  const wrist = toNormalized3D(hand.points[0]);
+  const indexMcp = toNormalized3D(hand.points[5]);
+  const pinkyMcp = toNormalized3D(hand.points[17]);
+  const v1 = {
+    x: indexMcp.x - wrist.x,
+    y: indexMcp.y - wrist.y,
+    z: indexMcp.z - wrist.z
+  };
+  const v2 = {
+    x: pinkyMcp.x - wrist.x,
+    y: pinkyMcp.y - wrist.y,
+    z: pinkyMcp.z - wrist.z
+  };
+  return normalize3D(cross3D(v1, v2));
+}
+
+function getDrapeSpec(hand, fingerIndex, knuckle, tip) {
+  const axis = normalize2D({ x: tip.x - knuckle.x, y: tip.y - knuckle.y });
+  const perp = { x: -axis.y, y: axis.x };
+  const normal = getPalmNormal(hand);
+  const tiltSigned = normal.x * perp.x + normal.y * perp.y;
+  const fingerWidth = distance(hand.points[0], hand.points[9]) * 0.2;
+  const sep = fingerWidth * clamp(0.25 + Math.abs(tiltSigned) * 2.5, 0.25, 1.6);
+
+  return {
+    perp,
+    sep,
+    frontSign: tiltSigned >= 0 ? 1 : -1,
+    mcp: hand.points[fingerMcps[fingerIndex]],
+    tip,
+    fingerWidth,
+    foldT: 0.5
+  };
 }
 
 function getOccluders(hand, fingerIndex, depth) {
@@ -282,14 +372,18 @@ function buildRopeSpecs(hands) {
   if (hands.length === 1) {
     const hand = hands[0];
     return fingerTips.map((tipIndex, fingerIndex) => {
-      // 掛點＝第二指節：繩子對折搭在手指上、兩端下垂（而不是從指尖垂下）
-      const drape = hand.points[secondKnuckles[fingerIndex]];
+      const knuckle = hand.points[secondKnuckles[fingerIndex]];
+      const tip = hand.points[tipIndex];
+      // 掛點往指尖微移，讓彎折視覺落在手指肚上，比釘在關節更像被手指托住。
+      const drapePoint = lerpPoint(knuckle, tip, 0.35);
+      const drape = getDrapeSpec(hand, fingerIndex, knuckle, tip);
       return {
         key: `single-${hand.id}-${tipIndex}`,
-        pins: [{ index: Math.floor(nodeCount / 2), point: drape }],
+        pins: [{ index: Math.floor(nodeCount / 2), point: drapePoint }],
         totalLength: state.height * 0.52,
-        depth: drape.z,
-        occluders: getOccluders(hand, fingerIndex, drape.z)
+        depth: drapePoint.z,
+        occluders: getOccluders(hand, fingerIndex, drapePoint.z),
+        drape
       };
     });
   }
@@ -358,6 +452,22 @@ function isOccluded(point, occluders) {
   return occluders.some((occluder) => distance(point, occluder.point) < occluder.radius);
 }
 
+function getDrapeDrawState(point, cursor, polyline, drape) {
+  const half = cursor / polyline.total;
+  const d = half - drape.foldT;
+  const ramp = clamp(Math.abs(d) / 0.5, 0, 1);
+  const side = d >= 0 ? drape.frontSign : -drape.frontSign;
+  return {
+    d,
+    x: point.x + drape.perp.x * drape.sep * ramp * side,
+    y: point.y + drape.perp.y * drape.sep * ramp * side
+  };
+}
+
+function isInsideOwnFinger(point, drape) {
+  return pointToSegmentDistance(point, drape.mcp, drape.tip) < drape.fingerWidth * 0.6;
+}
+
 function drawTextRope(rope) {
   const text = state.text.trim() || "互動設計實驗";
   const polyline = getPolylineSamples(rope.nodes);
@@ -373,21 +483,43 @@ function drawTextRope(rope) {
   context.shadowColor = "rgba(0, 0, 0, 0.55)";
   context.shadowBlur = 6;
 
-  let textIndex = 0;
-  let cursor = state.fontSize * 0.45;
-  while (cursor < polyline.total) {
-    const char = text[textIndex % text.length];
-    const spacing = Math.max(state.fontSize * 0.55, context.measureText(char).width * state.tightness);
-    const point = pointAtLength(polyline, cursor);
-    if (point && !isOccluded(point, rope.occluders)) {
-      context.save();
-      context.translate(point.x, point.y);
-      context.rotate(point.angle);
-      context.fillText(char, 0, 0);
-      context.restore();
+  const drawPass = (pass) => {
+    let textIndex = 0;
+    let cursor = state.fontSize * 0.45;
+    while (cursor < polyline.total) {
+      const char = text[textIndex % text.length];
+      const spacing = Math.max(state.fontSize * 0.55, context.measureText(char).width * state.tightness);
+      const point = pointAtLength(polyline, cursor);
+      if (point) {
+        const drapeState = rope.drape ? getDrapeDrawState(point, cursor, polyline, rope.drape) : null;
+        const isBack = drapeState ? drapeState.d < -foldBand : false;
+        const shouldDraw = pass === "all" || (pass === "back" ? isBack : !isBack);
+        const drawPoint = drapeState ? { x: drapeState.x, y: drapeState.y } : point;
+        const blockedByOwnFinger = rope.drape && isBack && isInsideOwnFinger(drawPoint, rope.drape);
+
+        if (shouldDraw && !blockedByOwnFinger && !isOccluded(drawPoint, rope.occluders)) {
+          context.save();
+          context.globalAlpha = isBack ? 0.5 : 1;
+          context.translate(drawPoint.x, drawPoint.y);
+          context.rotate(point.angle);
+          // 後段縮小並先畫，讓前段有明確壓在手指上方的層次。
+          if (isBack) {
+            context.scale(0.9, 0.9);
+          }
+          context.fillText(char, 0, 0);
+          context.restore();
+        }
+      }
+      cursor += spacing;
+      textIndex += 1;
     }
-    cursor += spacing;
-    textIndex += 1;
+  };
+
+  if (rope.drape) {
+    drawPass("back");
+    drawPass("front");
+  } else {
+    drawPass("all");
   }
 
   context.restore();
@@ -421,7 +553,7 @@ function updateAndDrawRopes() {
   }
 
   const ropes = specs
-    .map((spec) => updateRope(spec.key, spec.pins, spec.totalLength, spec.depth, spec.occluders))
+    .map((spec) => updateRope(spec.key, spec.pins, spec.totalLength, spec.depth, spec.occluders, spec.drape))
     .sort((a, b) => b.depth - a.depth);
 
   for (const rope of ropes) {
