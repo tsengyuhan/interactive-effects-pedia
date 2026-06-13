@@ -119,6 +119,18 @@ Shell API 用法
     return overlay;
   }
 
+  // 載入提示：相機/麥克風與模型初始化要等幾秒，先給提示讓使用者知道不是當掉
+  function createLoadingOverlay(message) {
+    const overlay = createElement("div", "shell-loading-overlay");
+    overlay.setAttribute("role", "status");
+    const panel = createElement("div", "shell-loading-panel");
+    const spinner = createElement("div", "shell-loading-spinner");
+    const text = createElement("p", "shell-loading-text", message || "載入中…");
+    setChildren(panel, [spinner, text]);
+    overlay.append(panel);
+    return overlay;
+  }
+
   function createShell(effect) {
     document.title = `${effect.title}｜${APP_TITLE}`;
     document.body.classList.add("shell-page");
@@ -286,7 +298,20 @@ Shell API 用法
       return button;
     }
 
+    function hideLoading() {
+      const el = document.querySelector(".shell-loading-overlay");
+      if (el) {
+        el.remove();
+      }
+    }
+
+    function showLoading(message) {
+      hideLoading();
+      document.body.append(createLoadingOverlay(message));
+    }
+
     function showError(message) {
+      hideLoading();
       const old = document.querySelector(".shell-error-overlay");
       if (old) {
         old.remove();
@@ -298,7 +323,9 @@ Shell API 用法
       container,
       addParam,
       addButton,
-      showError
+      showError,
+      showLoading,
+      hideLoading
     };
   }
 
@@ -318,7 +345,9 @@ Shell API 用法
           addButton() {},
           showError(message) {
             document.body.append(createErrorOverlay(message));
-          }
+          },
+          showLoading() {},
+          hideLoading() {}
         };
       }
       return createShell(effect);
