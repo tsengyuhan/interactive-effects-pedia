@@ -71,11 +71,12 @@ window.EFFECTS = [
     id: "text-ropes",
     title: "玩弄文字於指尖",
     category: "身體動作",
-    description: "輸入文字，單手時五條文字繩從指尖垂下，雙手時連接兩手對應指尖",
-    instructions: "在上方輸入文字；可調整字體大小、粗細、顏色、緊密度、文字繩長度與重力。單手時文字繩從五指尖垂下並隨手晃動；雙手時文字繩會連接兩手對應指尖",
-    tech: ["MediaPipe Hands", "getUserMedia", "Canvas 2D", "Verlet 物理"],
+    description: "輸入文字，單手時五條文字繩從指尖垂下，雙手時連接兩手對應指尖，可切換純手部拼貼畫面",
+    instructions: "在上方輸入文字；可調整顯示模式、字體大小、粗細、顏色、緊密度、文字繩長度與重力。純手部模式會移除整片 webcam 背景，只保留到手腕的手與撕紙白邊。單手時文字繩從五指尖垂下並隨手晃動；雙手時文字繩會連接兩手對應指尖",
+    tech: ["MediaPipe Hands", "MediaPipe Image Segmenter", "getUserMedia", "Canvas 2D", "Verlet 物理"],
     principle: [
       "MediaPipe 手部模型即時取得五個指尖座標",
+      "純手部模式用內建人像分割模型，配合手部關鍵點描出的手形與手腕切線，裁出到手腕為止的手並加上撕紙白邊",
       "單手時每個指尖固定一條 Verlet 文字繩，另一端受重力自然垂下並保留甩動慣性",
       "雙手時固定兩手對應指尖，靠節點距離約束產生連接兩手的文字繩"
     ],

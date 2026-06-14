@@ -1,8 +1,16 @@
-import { FilesetResolver, HandLandmarker } from "../../libs/mediapipe/vision_bundle.mjs";
+import { FilesetResolver, HandLandmarker, ImageSegmenter } from "../../libs/mediapipe/vision_bundle.mjs";
 
 const shell = Shell.init({ id: "text-ropes" });
 const canvas = document.createElement("canvas");
 const context = canvas.getContext("2d");
+const mirroredVideoCanvas = document.createElement("canvas");
+const mirroredVideoContext = mirroredVideoCanvas.getContext("2d");
+const handMaskCanvas = document.createElement("canvas");
+const handMaskContext = handMaskCanvas.getContext("2d");
+const handShapeCanvas = document.createElement("canvas");
+const handShapeContext = handShapeCanvas.getContext("2d");
+const handCutoutCanvas = document.createElement("canvas");
+const handCutoutContext = handCutoutCanvas.getContext("2d");
 const video = document.createElement("video");
 const textInput = document.createElement("input");
 
@@ -10,6 +18,29 @@ const errorMessage = "請允許攝影機權限後重新整理頁面；若直接�
 const fingerTips = [4, 8, 12, 16, 20];
 const nodeCount = 22;
 const constraintIterations = 8;
+const handModeStyle = {
+  background: "#357fc5",
+  personThreshold: 0.18,
+  wristPadding: 30,
+  palmPadding: 70,
+  edgeSize: 3,
+  edgeJitter: 1.2,
+  shadowBlur: 20,
+  shadowOffsetX: 0,
+  shadowOffsetY: 12,
+  shadowColor: "rgba(12, 38, 68, 0.34)"
+};
+const TORN_PAPER_FILTER_ID = "tr-torn-paper-displace";
+const SUPPORTS_CTX_FILTER = (() => {
+  try {
+    const probe = document.createElement("canvas").getContext("2d");
+    return probe && "filter" in probe;
+  } catch (error) {
+    return false;
+  }
+})();
+let visionFileset = null;
+let segmenterPromise = null;
 
 const state = {
   width: 1,
@@ -18,6 +49,8 @@ const state = {
   hasVideoFrame: false,
   animationId: 0,
   hands: [],
+  personMask: null,
+  segmenter: null,
   ropes: new Map(),
   text: "互動設計實驗",
   fontSize: 24,
@@ -25,7 +58,8 @@ const state = {
   color: "#ffffff",
   tightness: 1,
   ropeLength: 0.45,
-  gravity: 1.4
+  gravity: 1.4,
+  display: "full"
 };
 
 canvas.style.position = "absolute";
@@ -61,6 +95,20 @@ textInput.style.backdropFilter = "blur(12px)";
 shell.container.style.overflow = "hidden";
 shell.container.style.background = "#05070a";
 shell.container.append(video, canvas, textInput);
+
+shell.addParam({
+  key: "display",
+  type: "select",
+  label: "顯示模式",
+  value: state.display,
+  options: [
+    { value: "full", label: "完整畫面" },
+    { value: "hand", label: "純手部模式" }
+  ],
+  onChange(value) {
+    state.display = value;
+  }
+});
 
 shell.addParam({
   key: "fontSize",
@@ -146,6 +194,14 @@ function resize() {
   state.height = Math.max(1, shell.container.clientHeight || window.innerHeight);
   canvas.width = Math.floor(state.width);
   canvas.height = Math.floor(state.height);
+  mirroredVideoCanvas.width = canvas.width;
+  mirroredVideoCanvas.height = canvas.height;
+  handMaskCanvas.width = canvas.width;
+  handMaskCanvas.height = canvas.height;
+  handShapeCanvas.width = canvas.width;
+  handShapeCanvas.height = canvas.height;
+  handCutoutCanvas.width = canvas.width;
+  handCutoutCanvas.height = canvas.height;
   context.setTransform(1, 0, 0, 1, 0, 0);
 }
 
@@ -179,6 +235,282 @@ function drawMirroredVideo() {
   context.scale(-1, 1);
   context.drawImage(video, 0, 0, state.width, state.height);
   context.restore();
+}
+
+function drawMirroredVideoTo(targetContext) {
+  targetContext.save();
+  targetContext.clearRect(0, 0, state.width, state.height);
+  targetContext.translate(state.width, 0);
+  targetContext.scale(-1, 1);
+  targetContext.drawImage(video, 0, 0, state.width, state.height);
+  targetContext.restore();
+}
+
+function readPersonMask(result) {
+  if (!result || !result.confidenceMasks || !result.confidenceMasks[0]) {
+    return null;
+  }
+  const mask = result.confidenceMasks[0];
+  return {
+    width: mask.width,
+    height: mask.height,
+    data: mask.getAsFloat32Array()
+  };
+}
+
+function mirroredPersonMaskAt(mask, x, y) {
+  if (!mask) {
+    return 0;
+  }
+  const nx = clamp(x / state.width, 0, 1);
+  const ny = clamp(y / state.height, 0, 1);
+  const mx = clamp(Math.floor((1 - nx) * mask.width), 0, mask.width - 1);
+  const my = clamp(Math.floor(ny * mask.height), 0, mask.height - 1);
+  return mask.data[my * mask.width + mx] || 0;
+}
+
+function injectTornPaperFilter() {
+  if (!SUPPORTS_CTX_FILTER || document.getElementById(TORN_PAPER_FILTER_ID)) {
+    return;
+  }
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "0");
+  svg.setAttribute("height", "0");
+  svg.setAttribute("aria-hidden", "true");
+  svg.style.position = "absolute";
+  svg.style.pointerEvents = "none";
+  svg.innerHTML =
+    `<filter id="${TORN_PAPER_FILTER_ID}" x="-20%" y="-20%" width="140%" height="140%" color-interpolation-filters="sRGB">` +
+    `<feTurbulence type="fractalNoise" baseFrequency="0.052" numOctaves="2" seed="23" stitchTiles="stitch" result="noise"/>` +
+    `<feDisplacementMap in="SourceGraphic" in2="noise" scale="5.5" xChannelSelector="R" yChannelSelector="G"/>` +
+    `</filter>`;
+  document.body.appendChild(svg);
+}
+
+function getHandLineWidth(hand) {
+  const palmWidth = distance(hand.points[5], hand.points[17]);
+  return clamp(palmWidth * 0.34, 14, 72);
+}
+
+function drawHandPolyline(points, lineWidth) {
+  if (points.length < 2) {
+    return;
+  }
+  handShapeContext.lineWidth = lineWidth;
+  handShapeContext.beginPath();
+  handShapeContext.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i += 1) {
+    handShapeContext.lineTo(points[i].x, points[i].y);
+  }
+  handShapeContext.stroke();
+}
+
+function drawHandShape(hand) {
+  if (!hand || hand.points.length < 21) {
+    return;
+  }
+
+  const lineWidth = getHandLineWidth(hand);
+  const fingerLineWidth = lineWidth * 1.22;
+  handShapeContext.fillStyle = "#ffffff";
+  handShapeContext.strokeStyle = "#ffffff";
+  handShapeContext.lineWidth = lineWidth;
+  handShapeContext.lineCap = "round";
+  handShapeContext.lineJoin = "round";
+
+  // 手掌多邊形先以重心為基準往外撐 palmPadding，把兩側魚際肉與掌根包進來（超集）；
+  // 多出來的部分後面會被 person mask 修回真手輪廓，所以撐大是安全的。
+  const palmIndices = [0, 1, 5, 9, 13, 17];
+  const rawPalm = palmIndices.map((index) => hand.points[index]);
+  const palmHull = {
+    x: rawPalm.reduce((sum, p) => sum + p.x, 0) / rawPalm.length,
+    y: rawPalm.reduce((sum, p) => sum + p.y, 0) / rawPalm.length
+  };
+  const palmPoints = rawPalm.map((p) => {
+    const dx = p.x - palmHull.x;
+    const dy = p.y - palmHull.y;
+    const len = Math.hypot(dx, dy) || 1;
+    return {
+      x: p.x + (dx / len) * handModeStyle.palmPadding,
+      y: p.y + (dy / len) * handModeStyle.palmPadding
+    };
+  });
+  handShapeContext.beginPath();
+  handShapeContext.moveTo(palmPoints[0].x, palmPoints[0].y);
+  for (let i = 1; i < palmPoints.length; i += 1) {
+    handShapeContext.lineTo(palmPoints[i].x, palmPoints[i].y);
+  }
+  handShapeContext.closePath();
+  handShapeContext.fill();
+  handShapeContext.stroke();
+
+  const palmRootRadius = clamp(lineWidth * 0.95, 16, 70);
+  handShapeContext.beginPath();
+  handShapeContext.arc(hand.points[0].x, hand.points[0].y, palmRootRadius, 0, Math.PI * 2);
+  handShapeContext.fill();
+
+  const wrist = hand.points[0];
+  const palmCenter = [5, 9, 13, 17].reduce(
+    (center, index) => {
+      center.x += hand.points[index].x / 4;
+      center.y += hand.points[index].y / 4;
+      return center;
+    },
+    { x: 0, y: 0 }
+  );
+  const wristDirectionX = wrist.x - palmCenter.x;
+  const wristDirectionY = wrist.y - palmCenter.y;
+  const wristDirectionLength = Math.hypot(wristDirectionX, wristDirectionY) || 1;
+  const wristExtend = distance(hand.points[5], hand.points[17]) * 0.3;
+  handShapeContext.lineWidth = lineWidth;
+  handShapeContext.beginPath();
+  handShapeContext.moveTo(wrist.x, wrist.y);
+  handShapeContext.lineTo(
+    wrist.x + (wristDirectionX / wristDirectionLength) * wristExtend,
+    wrist.y + (wristDirectionY / wristDirectionLength) * wristExtend
+  );
+  handShapeContext.stroke();
+
+  const fingers = [
+    [1, 2, 3, 4],
+    [5, 6, 7, 8],
+    [9, 10, 11, 12],
+    [13, 14, 15, 16],
+    [17, 18, 19, 20]
+  ];
+  for (const finger of fingers) {
+    drawHandPolyline(finger.map((index) => hand.points[index]), fingerLineWidth);
+  }
+
+  const fingertipRadius = fingerLineWidth * 0.52;
+  for (const tipIndex of fingerTips) {
+    const tip = hand.points[tipIndex];
+    handShapeContext.beginPath();
+    handShapeContext.arc(tip.x, tip.y, fingertipRadius, 0, Math.PI * 2);
+    handShapeContext.fill();
+  }
+}
+
+function getWristCut(hand) {
+  const wrist = hand.points[0];
+  const palmCenter = [5, 9, 13, 17].reduce(
+    (center, index) => {
+      center.x += hand.points[index].x / 4;
+      center.y += hand.points[index].y / 4;
+      return center;
+    },
+    { x: 0, y: 0 }
+  );
+  const dx = palmCenter.x - wrist.x;
+  const dy = palmCenter.y - wrist.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const handDirectionX = dx / length;
+  const handDirectionY = dy / length;
+  const cutX = wrist.x - handDirectionX * handModeStyle.wristPadding;
+  const cutY = wrist.y - handDirectionY * handModeStyle.wristPadding;
+
+  return { x: cutX, y: cutY, normalX: handDirectionX, normalY: handDirectionY };
+}
+
+function isInsideWristCut(cut, x, y) {
+  return (x - cut.x) * cut.normalX + (y - cut.y) * cut.normalY >= 0;
+}
+
+function drawHandShapeMask() {
+  handShapeContext.setTransform(1, 0, 0, 1, 0, 0);
+  handShapeContext.clearRect(0, 0, state.width, state.height);
+  for (const hand of state.hands) {
+    drawHandShape(hand);
+  }
+}
+
+function writeHandMask(mask) {
+  handMaskContext.setTransform(1, 0, 0, 1, 0, 0);
+  handMaskContext.clearRect(0, 0, state.width, state.height);
+  if (state.hands.length === 0) {
+    return;
+  }
+
+  drawHandShapeMask();
+
+  const width = handMaskCanvas.width;
+  const height = handMaskCanvas.height;
+  const image = handMaskContext.createImageData(width, height);
+  const pixels = image.data;
+  const shapePixels = handShapeContext.getImageData(0, 0, width, height).data;
+  const wristCuts = state.hands.map(getWristCut);
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      if (shapePixels[index + 3] === 0 || mirroredPersonMaskAt(mask, x, y) < handModeStyle.personThreshold) {
+        continue;
+      }
+      if (!wristCuts.some((cut) => isInsideWristCut(cut, x, y))) {
+        continue;
+      }
+      pixels[index] = 255;
+      pixels[index + 1] = 255;
+      pixels[index + 2] = 255;
+      pixels[index + 3] = 255;
+    }
+  }
+
+  handMaskContext.putImageData(image, 0, 0);
+}
+
+function drawPaperEdge() {
+  injectTornPaperFilter();
+
+  context.save();
+  context.shadowColor = handModeStyle.shadowColor;
+  context.shadowBlur = handModeStyle.shadowBlur;
+  context.shadowOffsetX = handModeStyle.shadowOffsetX;
+  context.shadowOffsetY = handModeStyle.shadowOffsetY;
+  context.drawImage(handMaskCanvas, 0, 0);
+  context.restore();
+
+  context.save();
+  context.globalAlpha = 0.96;
+  if (SUPPORTS_CTX_FILTER) {
+    context.filter = `url(#${TORN_PAPER_FILTER_ID})`;
+  }
+  const rings = Math.max(3, Math.round(handModeStyle.edgeSize * 2));
+  for (let i = 0; i < rings; i += 1) {
+    const angle = i * 2.399963229728653;
+    const radius = handModeStyle.edgeSize * (0.65 + (i % 3) * 0.18);
+    const jitter = handModeStyle.edgeJitter * Math.sin(i * 12.9898);
+    const x = Math.cos(angle) * (radius + jitter);
+    const y = Math.sin(angle) * (radius - jitter);
+    context.drawImage(handMaskCanvas, x, y);
+  }
+  context.restore();
+}
+
+function drawHandOnlyBackground(mask) {
+  context.save();
+  context.clearRect(0, 0, state.width, state.height);
+  context.fillStyle = handModeStyle.background;
+  context.fillRect(0, 0, state.width, state.height);
+  context.restore();
+
+  writeHandMask(mask);
+  if (state.hands.length === 0) {
+    return;
+  }
+
+  drawMirroredVideoTo(mirroredVideoContext);
+
+  handCutoutContext.setTransform(1, 0, 0, 1, 0, 0);
+  handCutoutContext.clearRect(0, 0, state.width, state.height);
+  handCutoutContext.drawImage(mirroredVideoCanvas, 0, 0);
+  handCutoutContext.globalCompositeOperation = "destination-in";
+  handCutoutContext.drawImage(handMaskCanvas, 0, 0);
+  handCutoutContext.globalCompositeOperation = "source-over";
+
+  drawPaperEdge();
+  context.drawImage(handCutoutCanvas, 0, 0);
 }
 
 function makeNode(x, y) {
@@ -454,6 +786,39 @@ function updateAndDrawRopes() {
   }
 }
 
+function updateHands(landmarker, now) {
+  const result = landmarker.detectForVideo(video, now);
+  state.hands = (result.landmarks || []).map(analyzeHand);
+}
+
+function updateHandModeMask(segmenter, now) {
+  const result = segmenter.segmentForVideo(video, now);
+  const mask = readPersonMask(result);
+  state.personMask = mask;
+  if (result && typeof result.close === "function") {
+    result.close();
+  }
+  return mask;
+}
+
+function ensureSegmenter() {
+  if (state.segmenter) {
+    return Promise.resolve(state.segmenter);
+  }
+  if (!segmenterPromise) {
+    segmenterPromise = ImageSegmenter.createFromOptions(visionFileset, {
+      baseOptions: { modelAssetPath: "../../libs/mediapipe/selfie_segmenter.tflite" },
+      runningMode: "VIDEO",
+      outputCategoryMask: false,
+      outputConfidenceMasks: true
+    }).then((segmenter) => {
+      state.segmenter = segmenter;
+      return segmenter;
+    });
+  }
+  return segmenterPromise;
+}
+
 function render(landmarker) {
   const now = performance.now();
   if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -461,11 +826,27 @@ function render(landmarker) {
       state.hasVideoFrame = true;
       shell.hideLoading();
     }
-    drawMirroredVideo();
-    if (video.currentTime !== state.lastVideoTime) {
-      state.lastVideoTime = video.currentTime;
-      const result = landmarker.detectForVideo(video, now);
-      state.hands = (result.landmarks || []).map(analyzeHand);
+    if (state.display === "hand") {
+      let mask = state.personMask;
+      if (!state.segmenter) {
+        ensureSegmenter().catch((error) => {
+          console.error(error);
+        });
+      }
+      if (video.currentTime !== state.lastVideoTime) {
+        state.lastVideoTime = video.currentTime;
+        updateHands(landmarker, now);
+        if (state.segmenter) {
+          mask = updateHandModeMask(state.segmenter, now);
+        }
+      }
+      drawHandOnlyBackground(mask);
+    } else {
+      drawMirroredVideo();
+      if (video.currentTime !== state.lastVideoTime) {
+        state.lastVideoTime = video.currentTime;
+        updateHands(landmarker, now);
+      }
     }
     updateAndDrawRopes();
   }
@@ -497,8 +878,8 @@ async function start() {
     shell.showLoading("正在開啟相機，請稍候…");
     resize();
     await setupCamera();
-    const fileset = await FilesetResolver.forVisionTasks("../../libs/mediapipe/wasm");
-    const landmarker = await HandLandmarker.createFromOptions(fileset, {
+    visionFileset = await FilesetResolver.forVisionTasks("../../libs/mediapipe/wasm");
+    const landmarker = await HandLandmarker.createFromOptions(visionFileset, {
       baseOptions: { modelAssetPath: "../../libs/mediapipe/hand_landmarker.task" },
       runningMode: "VIDEO",
       numHands: 2,
