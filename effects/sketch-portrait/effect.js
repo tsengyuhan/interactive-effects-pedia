@@ -356,7 +356,7 @@ function updateFineSketch(mask) {
       const gy = -tl - tc * 2 - tr + bl + bc * 2 + br;
       // 門檻起點調低：弱邊緣（細紋/髮絲/五官）也畫成淡細線 → 細節更多；
       // 高解析度維持線細、弱邊緣自然只給低 alpha，所以不會更粗更黑
-      const imageEdge = smoothstep(0.14, 0.40, Math.sqrt(gx * gx + gy * gy));
+      const imageEdge = smoothstep(0.04, 0.60, Math.sqrt(gx * gx + gy * gy));
       // 外框做淡：門檻提高並只給半強度，輪廓不再死黑
       const maskEdge = smoothstep(0.08, 0.34, Math.max(
         Math.abs(cover[idx] - cover[y * state.fineW + x0]),
