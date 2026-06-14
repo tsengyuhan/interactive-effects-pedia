@@ -9,6 +9,7 @@ const errorMessage = "請允許攝影機權限後重新整理頁面；若直接�
 const canvas = document.createElement("canvas");
 const context = canvas.getContext("2d");
 const video = document.createElement("video");
+const textInput = document.createElement("input");
 
 const paperCanvas = document.createElement("canvas");
 const paperCtx = paperCanvas.getContext("2d");
@@ -37,10 +38,15 @@ const PAPER_COLOR = "#f1ecdd";
 const GRID_COLOR = "rgba(70, 150, 90, 0.48)";
 const PENCIL_COLOR = "rgba(35, 32, 26, 0.42)";
 const STRIP = 2;
+const TEXT_FONT_NAME = "SketchPortraitIansui";
+const TEXT_FONT_STACK = `'${TEXT_FONT_NAME}', 'Microsoft JhengHei', 'PingFang TC', sans-serif`;
+const DEFAULT_TEXT = "光影在稿紙上慢慢長成人像";
 
 const state = {
   width: 1,
   height: 1,
+  mode: "hatch",
+  text: DEFAULT_TEXT,
   cell: 18,
   density: 1,
   band: 9,
@@ -71,9 +77,77 @@ canvas.style.cursor = "grab";
 video.muted = true;
 video.playsInline = true;
 video.style.display = "none";
+textInput.type = "text";
+textInput.value = state.text;
+textInput.placeholder = "輸入繁中文字，會循環填滿暗部格子";
+textInput.setAttribute("aria-label", "文字模式內容");
+textInput.style.position = "absolute";
+textInput.style.left = "50%";
+textInput.style.top = "18px";
+textInput.style.transform = "translateX(-50%)";
+textInput.style.zIndex = "3";
+textInput.style.width = "min(460px, calc(100vw - 36px))";
+textInput.style.boxSizing = "border-box";
+textInput.style.border = "1px solid rgba(84, 106, 72, 0.28)";
+textInput.style.borderRadius = "8px";
+textInput.style.padding = "10px 13px";
+textInput.style.background = "rgba(241, 236, 221, 0.86)";
+textInput.style.color = "#2b261d";
+textInput.style.font = `16px/1.35 ${TEXT_FONT_STACK}`;
+textInput.style.outline = "none";
+textInput.style.boxShadow = "0 10px 24px rgba(44, 38, 25, 0.16)";
+textInput.style.backdropFilter = "blur(10px)";
+textInput.style.display = "none";
 shell.container.style.overflow = "hidden";
 shell.container.style.background = "#dcd6c4";
-shell.container.append(video, canvas);
+shell.container.append(video, canvas, textInput);
+
+function updateTextInputVisibility() {
+  textInput.style.display = state.mode === "text" ? "block" : "none";
+}
+
+function normalizeText(value) {
+  return Array.from(value || "")
+    .filter((char) => !/\s|\p{Control}/u.test(char))
+    .join("");
+}
+
+function injectTextFont() {
+  if (document.getElementById("sp-text-font")) {
+    return;
+  }
+  const fontUrl = new URL("../../assets/fonts/iansui-common-hant.woff2", import.meta.url).href;
+  const style = document.createElement("style");
+  style.id = "sp-text-font";
+  style.textContent = `
+@font-face {
+  font-family: '${TEXT_FONT_NAME}';
+  src: url('${fontUrl}') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+`;
+  document.head.append(style);
+  if (document.fonts && typeof document.fonts.load === "function") {
+    document.fonts.load(`24px '${TEXT_FONT_NAME}'`).catch(() => {});
+  }
+}
+
+shell.addParam({
+  type: "select",
+  key: "mode",
+  label: "繪製模式",
+  value: state.mode,
+  options: [
+    { value: "hatch", label: "塗黑模式" },
+    { value: "text", label: "文字模式" }
+  ],
+  onChange(value) {
+    state.mode = value;
+    updateTextInputVisibility();
+  }
+});
 
 shell.addParam({
   type: "range",
@@ -100,6 +174,10 @@ shell.addParam({
   onChange(value) {
     state.density = value / 100;
   }
+});
+
+textInput.addEventListener("input", () => {
+  state.text = normalizeText(textInput.value) || DEFAULT_TEXT;
 });
 
 function clamp(value, min, max) {
@@ -462,10 +540,61 @@ function smoothDarkness() {
   }
 }
 
+function drawTextCell(ctx, char, x, y, size, strength, idx) {
+  const darkness = smoothstep(0.08, 0.82, strength);
+  const fontSize = Math.max(9, Math.floor(size * 0.86));
+  const weight = Math.round(380 + darkness * 360);
+  const jitterX = (hashRandom(idx * 13.1) - 0.5) * size * 0.08;
+  const jitterY = (hashRandom(idx * 17.9) - 0.5) * size * 0.08;
+
+  ctx.save();
+  ctx.translate(x + size * 0.5 + jitterX, y + size * 0.52 + jitterY);
+  ctx.rotate((hashRandom(idx * 23.7) - 0.5) * 0.08);
+  ctx.font = `${weight} ${fontSize}px ${TEXT_FONT_STACK}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = `rgba(38, 34, 28, ${0.30 + darkness * 0.62})`;
+  ctx.strokeStyle = `rgba(38, 34, 28, ${darkness * 0.18})`;
+  ctx.lineWidth = Math.max(0.15, size * 0.035 * darkness);
+  ctx.lineJoin = "round";
+  if (darkness > 0.34) {
+    ctx.strokeText(char, 0, 0);
+  }
+  ctx.fillText(char, 0, 0);
+  ctx.restore();
+}
+
+function drawTextSketch() {
+  const text = normalizeText(state.text) || DEFAULT_TEXT;
+  const chars = Array.from(text);
+  let charIndex = 0;
+
+  coarseCtx.save();
+  for (let row = 0; row < state.rows; row += 1) {
+    for (let col = 0; col < state.cols; col += 1) {
+      const idx = row * state.cols + col;
+      const strength = state.cur[idx];
+      const threshold = (0.35 + hashRandom(idx * 2.3) * 0.35) / MAX_LEVEL;
+      if (strength <= threshold) {
+        continue;
+      }
+      const char = chars[charIndex % chars.length];
+      drawTextCell(coarseCtx, char, col * state.cell, row * state.pitch, state.cell, strength, idx);
+      charIndex += 1;
+    }
+  }
+  coarseCtx.restore();
+}
+
 function drawCoarseSketch() {
   coarseCtx.setTransform(1, 0, 0, 1, 0, 0);
   coarseCtx.clearRect(0, 0, state.width, state.height);
   coarseCtx.drawImage(paperCanvas, 0, 0);
+
+  if (state.mode === "text") {
+    drawTextSketch();
+    return;
+  }
 
   coarseCtx.strokeStyle = PENCIL_COLOR;
   coarseCtx.lineWidth = 0.9;
@@ -717,6 +846,7 @@ async function start() {
   try {
     shell.showLoading("正在開啟相機並載入人像模型，請稍候…");
     injectPencilFilter();
+    injectTextFont();
     resize();
     await setupCamera();
     const fileset = await FilesetResolver.forVisionTasks("../../libs/mediapipe/wasm");
