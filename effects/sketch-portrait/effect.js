@@ -111,6 +111,38 @@ function smoothstep(edge0, edge1, value) {
   return t * t * (3 - 2 * t);
 }
 
+// 縫內鉛筆毛邊：用 SVG 的 feTurbulence＋feDisplacementMap 依雜訊把線條像素推移，
+// 做出石墨壓在粗紙上的不規則邊緣。固定 seed → 位移場在畫面上穩定，像紙的紋理。
+const PENCIL_FILTER_ID = "sp-pencil-displace";
+// 部分瀏覽器才支援 ctx.filter 引用 SVG filter（建議 Chrome / Edge）；不支援時退回無濾鏡
+const SUPPORTS_CTX_FILTER = (() => {
+  try {
+    const probe = document.createElement("canvas").getContext("2d");
+    return probe && "filter" in probe;
+  } catch (error) {
+    return false;
+  }
+})();
+
+function injectPencilFilter() {
+  if (!SUPPORTS_CTX_FILTER || document.getElementById(PENCIL_FILTER_ID)) {
+    return;
+  }
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", "0");
+  svg.setAttribute("height", "0");
+  svg.setAttribute("aria-hidden", "true");
+  svg.style.position = "absolute";
+  svg.style.pointerEvents = "none";
+  svg.innerHTML =
+    `<filter id="${PENCIL_FILTER_ID}" x="-15%" y="-15%" width="130%" height="130%" color-interpolation-filters="sRGB">` +
+    `<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" stitchTiles="stitch" result="noise"/>` +
+    `<feDisplacementMap in="SourceGraphic" in2="noise" scale="2.6" xChannelSelector="R" yChannelSelector="G"/>` +
+    `</filter>`;
+  document.body.appendChild(svg);
+}
+
 function hashRandom(seed) {
   const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
@@ -345,6 +377,10 @@ function updateFineSketch(mask) {
   finePixelCtx.putImageData(out, 0, 0);
   fineCtx.save();
   fineCtx.imageSmoothingEnabled = true;
+  // 只對線條圖層套位移濾鏡（紙底已先畫好、不受影響），讓邊緣變鉛筆毛邊
+  if (SUPPORTS_CTX_FILTER) {
+    fineCtx.filter = `url(#${PENCIL_FILTER_ID})`;
+  }
   fineCtx.drawImage(finePixelCanvas, 0, 0, state.width, state.height);
   fineCtx.restore();
 }
@@ -679,6 +715,7 @@ async function setupCamera() {
 async function start() {
   try {
     shell.showLoading("正在開啟相機並載入人像模型，請稍候…");
+    injectPencilFilter();
     resize();
     await setupCamera();
     const fileset = await FilesetResolver.forVisionTasks("../../libs/mediapipe/wasm");
