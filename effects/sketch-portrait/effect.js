@@ -138,7 +138,7 @@ function injectPencilFilter() {
   svg.innerHTML =
     `<filter id="${PENCIL_FILTER_ID}" x="-15%" y="-15%" width="130%" height="130%" color-interpolation-filters="sRGB">` +
     `<feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" stitchTiles="stitch" result="noise"/>` +
-    `<feDisplacementMap in="SourceGraphic" in2="noise" scale="2.6" xChannelSelector="R" yChannelSelector="G"/>` +
+    `<feDisplacementMap in="SourceGraphic" in2="noise" scale="1.8" xChannelSelector="R" yChannelSelector="G"/>` +
     `</filter>`;
   document.body.appendChild(svg);
 }
@@ -176,7 +176,7 @@ function buildGrid() {
 
 function buildFineBuffers() {
   // 解析度拉高，縮放回畫面時線條更細更利落（不會糊成粗線）
-  const maxW = 460;
+  const maxW = 600;
   const scale = Math.min(1, maxW / state.width);
   state.fineW = Math.max(1, Math.round(state.width * scale));
   state.fineH = Math.max(1, Math.round(state.height * scale));
@@ -354,8 +354,8 @@ function updateFineSketch(mask) {
       const br = smooth[y1 * state.fineW + x1];
       const gx = -tl - ml * 2 - bl + tr + mr * 2 + br;
       const gy = -tl - tc * 2 - tr + bl + bc * 2 + br;
-      // 門檻拉高：只留較明顯的特徵線，過濾細碎雜線 → 線少而乾淨
-      const imageEdge = smoothstep(0.16, 0.46, Math.sqrt(gx * gx + gy * gy));
+      // 門檻拉高且區間收窄：只留邊緣最強的核心 → 線更細、過濾外圍淡邊與雜線
+      const imageEdge = smoothstep(0.26, 0.44, Math.sqrt(gx * gx + gy * gy));
       // 外框做淡：門檻提高並只給半強度，輪廓不再死黑
       const maskEdge = smoothstep(0.08, 0.34, Math.max(
         Math.abs(cover[idx] - cover[y * state.fineW + x0]),
