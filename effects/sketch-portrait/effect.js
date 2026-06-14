@@ -260,6 +260,7 @@ function updateTargets(segmenter, now) {
 function updateFineSketch(mask) {
   fineCtx.setTransform(1, 0, 0, 1, 0, 0);
   fineCtx.clearRect(0, 0, state.width, state.height);
+  // 縫內底＝同一張純紙底（PAPER_COLOR＋紙紋），與外面稿紙完全一致
   fineCtx.drawImage(plainPaperCanvas, 0, 0);
 
   fineSampleCtx.save();
