@@ -143,7 +143,8 @@ function buildGrid() {
 }
 
 function buildFineBuffers() {
-  const maxW = 340;
+  // 解析度拉高，縮放回畫面時線條更細更利落（不會糊成粗線）
+  const maxW = 460;
   const scale = Math.min(1, maxW / state.width);
   state.fineW = Math.max(1, Math.round(state.width * scale));
   state.fineH = Math.max(1, Math.round(state.height * scale));
@@ -320,20 +321,23 @@ function updateFineSketch(mask) {
       const br = smooth[y1 * state.fineW + x1];
       const gx = -tl - ml * 2 - bl + tr + mr * 2 + br;
       const gy = -tl - tc * 2 - tr + bl + bc * 2 + br;
-      const imageEdge = smoothstep(0.08, 0.27, Math.sqrt(gx * gx + gy * gy));
-      const maskEdge = smoothstep(0.035, 0.22, Math.max(
+      // 門檻拉高：只留較明顯的特徵線，過濾細碎雜線 → 線少而乾淨
+      const imageEdge = smoothstep(0.16, 0.46, Math.sqrt(gx * gx + gy * gy));
+      // 外框做淡：門檻提高並只給半強度，輪廓不再死黑
+      const maskEdge = smoothstep(0.08, 0.34, Math.max(
         Math.abs(cover[idx] - cover[y * state.fineW + x0]),
         Math.abs(cover[idx] - cover[y * state.fineW + x1]),
         Math.abs(cover[idx] - cover[y0 * state.fineW + x]),
         Math.abs(cover[idx] - cover[y1 * state.fineW + x])
-      ));
-      const grain = 0.94 + hashRandom(idx * 0.77) * 0.12;
-      const line = clamp(Math.max(imageEdge * 0.9, maskEdge) * cover[idx] * grain, 0, 1);
+      )) * 0.45;
+      const grain = 0.9 + hashRandom(idx * 0.77) * 0.16;
+      const line = clamp(Math.max(imageEdge, maskEdge) * cover[idx] * grain, 0, 1);
       const p = idx * 4;
-      dst[p] = 40;
-      dst[p + 1] = 37;
-      dst[p + 2] = 31;
-      dst[p + 3] = Math.round(line * 230);
+      dst[p] = 48;
+      dst[p + 1] = 45;
+      dst[p + 2] = 39;
+      // 整體變淡，像鉛筆輕畫在紙上
+      dst[p + 3] = Math.round(line * 165);
     }
   }
 
