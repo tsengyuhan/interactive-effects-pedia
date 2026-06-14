@@ -1,19 +1,37 @@
 <!DOCTYPE html>
 <html lang="zh-Hant">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>互動效果百科</title>
+  <title>Interactia 網頁互動圖鑑</title>
+  <!-- 編輯風排版需要高對比襯線字（Playfair）＋中文襯線（Noto Serif TC）；離線時自動退回 Georgia / 系統襯線 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet"
+    href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Noto+Serif+TC:wght@400;600;700&display=swap">
   <link rel="stylesheet" href="assets/home.css">
 </head>
+
 <body>
-  <header>
-    <h1>互動效果百科</h1>
-    <p class="subtitle">互動網頁效果的靈感資料庫</p>
-    <nav id="filter-chips" aria-label="效果分類"></nav>
-  </header>
+  <section class="hero">
+    <p class="hero-kicker"><em>INTERACTIA</em></p>
+    <h1 class="hero-title">互動網頁效果靈感圖鑑</h1>
+    <p class="hero-lead">各種有趣互動的快速prototype，點即進入體驗，可參考說明與原始碼。</p>
+  </section>
+
+  <nav class="filter-bar" id="filter-chips" aria-label="效果分類"></nav>
+
   <main id="card-grid"></main>
+
+  <footer class="site-footer">
+    <span>互動效果百科</span>
+    <span class="dot" aria-hidden="true">·</span>
+    <span>Inspiration Library</span>
+  </footer>
+
   <script src="effects/effects.js"></script>
   <script src="assets/home.js"></script>
 </body>
+
 </html>
