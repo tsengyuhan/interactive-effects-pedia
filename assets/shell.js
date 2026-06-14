@@ -53,7 +53,7 @@ Shell API 用法
 (function () {
   "use strict";
 
-  const APP_TITLE = "互動效果百科";
+  const APP_TITLE = "Interactia 網頁互動圖鑑";
   // 效果原始碼在 GitHub 的資料夾位置；資訊面板據此產生「在 GitHub 查看原始碼」連結
   const REPO_EFFECTS_BASE = "https://github.com/tsengyuhan/interactive-effects-pedia/tree/master/effects";
 
