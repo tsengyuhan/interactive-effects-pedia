@@ -12,4 +12,8 @@
   - 檔名：`selfie_segmenter.tflite`
   - 下載日期：2026-06-14
   - 用途：草稿紙人像效果（effects/sketch-portrait）的人像去背，離線執行
+- 人臉偵測模型來源：https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite
+  - 檔名：`blaze_face_short_range.tflite`
+  - 下載日期：2026-06-18
+  - 用途：文字繩連連看（effects/text-rope-link）偵測畫面中多個人的頭部位置，離線執行
 - 全部離線執行，不使用 CDN

@@ -101,5 +101,23 @@ window.EFFECTS = [
     offline: true,
     offlineNote: "",
     hasParams: true
+  },
+  {
+    id: "text-rope-link",
+    title: "文字繩連連看",
+    category: "身體動作",
+    description: "輸入文字，文字繩從每個人頭頂垂下；多人時自動連接最靠近的兩顆頭，距離太遠會斷開反彈",
+    instructions: "面對鏡頭並輸入文字。只有你一人時，文字繩從頭頂往上甩出再垂下晃動；出現其他人時，文字繩會連到最靠近你的人的頭頂，隨兩人移動伸縮，超過最遠連接距離就斷開反彈成各自垂下的繩。可調文字大小、疏密、粗細、顏色、最遠連接距離與重力",
+    tech: ["MediaPipe Face Detector", "getUserMedia", "Canvas 2D", "Verlet 物理"],
+    principle: [
+      "FaceDetector 即時偵測畫面中每個人的頭部，跨幀以最近鄰配對維持身分",
+      "每個人都找出最靠近的另一個人，距離在門檻內就用一條 Verlet 文字繩連接兩顆頭頂",
+      "找不到夠近的人時，文字繩只固定在自己頭頂、另一端受重力垂下並隨人晃動",
+      "兩人拉遠超過最遠連接距離，連接繩斷開、兩端回彈成各自的單人繩"
+    ],
+    requirements: ["攝影機", "建議 Chrome / Edge", "舊機器 fps 較低", "需經 start.bat 或 HTTPS 開啟"],
+    offline: true,
+    offlineNote: "",
+    hasParams: true
   }
 ];
