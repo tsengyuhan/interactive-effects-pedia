@@ -9,6 +9,8 @@ const textInput = document.createElement("input");
 const nodeCount = 24;
 const constraintIterations = 8;
 const archSamples = 40;
+// 軟錨點拉力：每幀把錨點節點往「無形點」輕拉一次（非硬釘），保留 text-ropes 般的柔軟與晃動。
+const anchorPull = 0.35;
 const defaultText = "文字繩連連看";
 const errorMessage =
   "請允許相機權限，並確認瀏覽器支援 getUserMedia。建議用 start.bat 啟動本機伺服器後再開啟效果。";
@@ -29,7 +31,10 @@ const state = {
   color: "#ffffff",
   maxDistPct: 55,
   gravity: 1.2,
-  ropeLength: 0.45
+  ropeLength: 0.45,
+  anchorHeight: 55,
+  archHeightFactor: 0.45,
+  flowSpeed: 0.03
 };
 
 canvas.style.position = "absolute";
@@ -154,6 +159,45 @@ shell.addParam({
   }
 });
 
+shell.addParam({
+  key: "anchorHeight",
+  type: "range",
+  label: "無形錨點高度（單人）",
+  min: 0,
+  max: 200,
+  step: 5,
+  value: state.anchorHeight,
+  onChange(value) {
+    state.anchorHeight = value;
+  }
+});
+
+shell.addParam({
+  key: "archHeightFactor",
+  type: "range",
+  label: "拱起高度（雙人）",
+  min: 0.1,
+  max: 1,
+  step: 0.05,
+  value: state.archHeightFactor,
+  onChange(value) {
+    state.archHeightFactor = value;
+  }
+});
+
+shell.addParam({
+  key: "flowSpeed",
+  type: "range",
+  label: "文字流動速度（雙人）",
+  min: 0,
+  max: 0.12,
+  step: 0.005,
+  value: state.flowSpeed,
+  onChange(value) {
+    state.flowSpeed = value;
+  }
+});
+
 textInput.addEventListener("input", () => {
   state.text = textInput.value || textInput.placeholder;
 });
@@ -263,9 +307,9 @@ function singleRopeLength() {
   return state.height * state.ropeLength;
 }
 
-// 頭頂上方那個「無形的點」離頭頂的距離：依臉大小縮放，遠近一致；但不超過總長一半，確保還有垂下段。
-function singleUpRise(head, totalLength) {
-  return Math.min(clamp(head.size * 1.3, 70, 170), totalLength * 0.5);
+// 頭頂上方那個「無形的點」離頭頂的距離，由參數控制；但不超過總長一半，確保還有垂下段。
+function singleUpRise(totalLength) {
+  return Math.min(state.anchorHeight, totalLength * 0.5);
 }
 
 // 單人繩：node0 釘在頭頂，anchorIndex 那個節點釘在頭頂上方的無形點，
@@ -273,7 +317,7 @@ function singleUpRise(head, totalLength) {
 function makeSingleRope(key, head) {
   const totalLength = singleRopeLength();
   const restLength = totalLength / (nodeCount - 1);
-  const upRise = singleUpRise(head, totalLength);
+  const upRise = singleUpRise(totalLength);
   const anchorIndex = clamp(Math.round(upRise / restLength), 1, nodeCount - 2);
   const anchor = { x: head.x, y: head.y - upRise };
   const nodes = [];
@@ -291,7 +335,7 @@ function makeSingleRope(key, head) {
 // 雙人繩：移除重力，改用固定的「往上拱起」二次貝茲曲線取樣，兩端釘在兩顆頭頂。
 function buildArchNodes(p1, p2) {
   const d = distance(p1, p2);
-  const archHeight = clamp(d * 0.22, 36, 240);
+  const archHeight = clamp(d * state.archHeightFactor, 36, 600);
   const midX = (p1.x + p2.x) / 2;
   const midY = (p1.y + p2.y) / 2;
   const controlX = midX;
@@ -371,17 +415,20 @@ function updateSingleRope(key, head) {
   }
 
   const restLength = totalLength / (nodeCount - 1);
-  const upRise = singleUpRise(head, totalLength);
+  const upRise = singleUpRise(totalLength);
   const anchorIndex = clamp(Math.round(upRise / restLength), 1, nodeCount - 2);
   rope.restLength = restLength;
   rope.anchorIndex = anchorIndex;
   for (const node of rope.nodes) {
     node.fixed = false;
   }
+  // 只硬釘頭頂這一端；錨點改成軟拉，整條繩維持柔軟、能晃動（仿 text-ropes 單手繩）。
   setFixedNode(rope.nodes[0], head);
-  setFixedNode(rope.nodes[anchorIndex], { x: head.x, y: head.y - upRise });
 
   integrate(rope);
+  const anchorNode = rope.nodes[anchorIndex];
+  anchorNode.x += (head.x - anchorNode.x) * anchorPull;
+  anchorNode.y += (head.y - upRise - anchorNode.y) * anchorPull;
   satisfyConstraints(rope);
   return rope;
 }
@@ -460,7 +507,7 @@ function drawTextRope(rope, flowing) {
     // 流動繩用固定間距（中文字寬約等於字高），讓整串等距平移看起來連續。
     const sample = context.measureText(text[0] || "字").width;
     const spacing = Math.max(state.fontSize * 0.55, sample * state.spacing);
-    rope.flow += spacing * 0.02 * rope.direction;
+    rope.flow += spacing * state.flowSpeed * rope.direction;
     const len = text.length;
     const jMin = Math.ceil(rope.flow / spacing);
     const jMax = Math.floor((rope.flow + polyline.total) / spacing);
