@@ -8,9 +8,8 @@ const textInput = document.createElement("input");
 
 const nodeCount = 24;
 const constraintIterations = 8;
-const archSamples = 40;
-// 軟錨點拉力：每幀把錨點節點往「無形點」輕拉一次（非硬釘），保留 text-ropes 般的柔軟與晃動。
-const anchorPull = 0.35;
+// 單人繩往側邊垂掛的力道（相對重力的比例）：讓繩子不要正面直直垂下，而是稍微偏左或偏右。
+const leanFactor = 0.4;
 const defaultText = "文字繩連連看";
 const errorMessage =
   "請允許相機權限，並確認瀏覽器支援 getUserMedia。建議用 start.bat 啟動本機伺服器後再開啟效果。";
@@ -31,10 +30,7 @@ const state = {
   color: "#ffffff",
   maxDistPct: 55,
   gravity: 1.2,
-  ropeLength: 0.45,
-  anchorHeight: 55,
-  archHeightFactor: 0.45,
-  flowSpeed: 0.03
+  ropeLength: 0.45
 };
 
 canvas.style.position = "absolute";
@@ -159,45 +155,6 @@ shell.addParam({
   }
 });
 
-shell.addParam({
-  key: "anchorHeight",
-  type: "range",
-  label: "無形錨點高度（單人）",
-  min: 0,
-  max: 200,
-  step: 5,
-  value: state.anchorHeight,
-  onChange(value) {
-    state.anchorHeight = value;
-  }
-});
-
-shell.addParam({
-  key: "archHeightFactor",
-  type: "range",
-  label: "拱起高度（雙人）",
-  min: 0.1,
-  max: 1,
-  step: 0.05,
-  value: state.archHeightFactor,
-  onChange(value) {
-    state.archHeightFactor = value;
-  }
-});
-
-shell.addParam({
-  key: "flowSpeed",
-  type: "range",
-  label: "文字流動速度（雙人）",
-  min: 0,
-  max: 0.12,
-  step: 0.005,
-  value: state.flowSpeed,
-  onChange(value) {
-    state.flowSpeed = value;
-  }
-});
-
 textInput.addEventListener("input", () => {
   state.text = textInput.value || textInput.placeholder;
 });
@@ -302,53 +259,30 @@ function makeNode(x, y) {
   return { x, y, px: x, py: y, fixed: false };
 }
 
-// 單人文字繩總長度（含往上一段＋垂下段），由「文字繩長度」參數控制。
-function singleRopeLength() {
-  return state.height * state.ropeLength;
-}
-
-// 頭頂上方那個「無形的點」離頭頂的距離，由參數控制；但不超過總長一半，確保還有垂下段。
-function singleUpRise(totalLength) {
-  return Math.min(state.anchorHeight, totalLength * 0.5);
-}
-
-// 單人繩：node0 釘在頭頂，anchorIndex 那個節點釘在頭頂上方的無形點，
-// 兩釘點間是往上的繃直段，之後的節點自然垂下並隨頭部移動晃動。
-function makeSingleRope(key, head) {
-  const totalLength = singleRopeLength();
-  const restLength = totalLength / (nodeCount - 1);
-  const upRise = singleUpRise(totalLength);
-  const anchorIndex = clamp(Math.round(upRise / restLength), 1, nodeCount - 2);
-  const anchor = { x: head.x, y: head.y - upRise };
+// 與「玩弄文字於指尖」同一套作法：單端固定就整條往下自由垂掛、兩端固定就在中間留鬆弛弧度。
+function makeRope(key, pins, totalLength) {
   const nodes = [];
-  for (let i = 0; i < nodeCount; i += 1) {
-    if (i <= anchorIndex) {
-      const t = anchorIndex === 0 ? 0 : i / anchorIndex;
-      nodes.push(makeNode(head.x + (anchor.x - head.x) * t, head.y + (anchor.y - head.y) * t));
-    } else {
-      nodes.push(makeNode(anchor.x, anchor.y + (i - anchorIndex) * restLength));
+  const restLength = totalLength / (nodeCount - 1);
+  const start = pins[0].point;
+
+  if (pins.length === 1) {
+    for (let i = 0; i < nodeCount; i += 1) {
+      // 初始往下排開，避免節點擠在固定點造成第一幀爆衝。
+      const sway = Math.sin(i * 0.9 + key.length) * restLength * 0.18;
+      nodes.push(makeNode(start.x + sway, start.y + i * restLength));
+    }
+  } else {
+    const end = pins[pins.length - 1].point;
+    for (let i = 0; i < nodeCount; i += 1) {
+      const t = i / (nodeCount - 1);
+      const x = start.x + (end.x - start.x) * t;
+      // 初始略向下放，避免雙人繩剛出現時完全筆直。
+      const y = start.y + (end.y - start.y) * t + Math.sin(t * Math.PI) * totalLength * 0.08;
+      nodes.push(makeNode(x, y));
     }
   }
-  return { type: "single", key, nodes, restLength, anchorIndex };
-}
 
-// 雙人繩：移除重力，改用固定的「往上拱起」二次貝茲曲線取樣，兩端釘在兩顆頭頂。
-function buildArchNodes(p1, p2) {
-  const d = distance(p1, p2);
-  const archHeight = clamp(d * state.archHeightFactor, 36, 600);
-  const midX = (p1.x + p2.x) / 2;
-  const midY = (p1.y + p2.y) / 2;
-  const controlX = midX;
-  const controlY = midY - archHeight;
-  const nodes = [];
-  for (let i = 0; i < archSamples; i += 1) {
-    const t = i / (archSamples - 1);
-    const mt = 1 - t;
-    const x = mt * mt * p1.x + 2 * mt * t * controlX + t * t * p2.x;
-    const y = mt * mt * p1.y + 2 * mt * t * controlY + t * t * p2.y;
-    nodes.push({ x, y });
-  }
-  return nodes;
+  return { key, nodes, restLength, leanX: 0 };
 }
 
 function setFixedNode(node, point) {
@@ -361,6 +295,7 @@ function setFixedNode(node, point) {
 
 function integrate(rope) {
   const gravity = state.gravity * clamp(state.height / 720, 0.7, 1.7);
+  const lean = rope.leanX || 0;
   for (const node of rope.nodes) {
     if (node.fixed) {
       continue;
@@ -369,7 +304,7 @@ function integrate(rope) {
     const vy = (node.y - node.py) * 0.96;
     node.px = node.x;
     node.py = node.y;
-    node.x += vx;
+    node.x += vx + lean;
     node.y += vy + gravity;
   }
 }
@@ -402,45 +337,24 @@ function satisfyConstraints(rope) {
   }
 }
 
-function updateSingleRope(key, head) {
-  const totalLength = singleRopeLength();
+function updateRope(key, pins, totalLength, leanX) {
   let rope = state.ropes.get(key);
-  if (
-    !rope ||
-    rope.type !== "single" ||
-    Math.abs(rope.nodes.length * rope.restLength - totalLength) > state.height * 0.25
-  ) {
-    rope = makeSingleRope(key, head);
+  if (!rope || Math.abs(rope.nodes.length * rope.restLength - totalLength) > state.height * 0.25) {
+    rope = makeRope(key, pins, totalLength);
     state.ropes.set(key, rope);
   }
 
-  const restLength = totalLength / (nodeCount - 1);
-  const upRise = singleUpRise(totalLength);
-  const anchorIndex = clamp(Math.round(upRise / restLength), 1, nodeCount - 2);
-  rope.restLength = restLength;
-  rope.anchorIndex = anchorIndex;
+  rope.restLength = totalLength / (nodeCount - 1);
+  rope.leanX = leanX || 0;
   for (const node of rope.nodes) {
     node.fixed = false;
   }
-  // 只硬釘頭頂這一端；錨點改成軟拉，整條繩維持柔軟、能晃動（仿 text-ropes 單手繩）。
-  setFixedNode(rope.nodes[0], head);
+  for (const pin of pins) {
+    setFixedNode(rope.nodes[pin.index], pin.point);
+  }
 
   integrate(rope);
-  const anchorNode = rope.nodes[anchorIndex];
-  anchorNode.x += (head.x - anchorNode.x) * anchorPull;
-  anchorNode.y += (head.y - upRise - anchorNode.y) * anchorPull;
   satisfyConstraints(rope);
-  return rope;
-}
-
-function updatePairRope(key, p1, p2) {
-  let rope = state.ropes.get(key);
-  if (!rope || rope.type !== "pair") {
-    // 連線剛形成：隨機決定文字流動方向（+1 / -1），之後持續同向流動。
-    rope = { type: "pair", key, flow: 0, direction: Math.random() < 0.5 ? 1 : -1 };
-    state.ropes.set(key, rope);
-  }
-  rope.nodes = buildArchNodes(p1, p2);
   return rope;
 }
 
@@ -482,8 +396,7 @@ function drawCharAt(point, char, strokeWidth) {
   context.restore();
 }
 
-// flowing 為 true（雙人繩）時：整串文字以固定間距沿弧長隨時間平移，呈現「文字流動」。
-function drawTextRope(rope, flowing) {
+function drawTextRope(rope) {
   const text = state.text.trim() || defaultText;
   const polyline = getPolylineSamples(rope.nodes);
   if (polyline.total < 4) {
@@ -503,33 +416,17 @@ function drawTextRope(rope, flowing) {
   context.shadowColor = "rgba(0, 0, 0, 0.56)";
   context.shadowBlur = 7;
 
-  if (flowing) {
-    // 流動繩用固定間距（中文字寬約等於字高），讓整串等距平移看起來連續。
-    const sample = context.measureText(text[0] || "字").width;
-    const spacing = Math.max(state.fontSize * 0.55, sample * state.spacing);
-    rope.flow += spacing * state.flowSpeed * rope.direction;
-    const len = text.length;
-    const jMin = Math.ceil(rope.flow / spacing);
-    const jMax = Math.floor((rope.flow + polyline.total) / spacing);
-    for (let j = jMin; j <= jMax; j += 1) {
-      const point = pointAtLength(polyline, j * spacing - rope.flow);
-      if (point) {
-        drawCharAt(point, text[((j % len) + len) % len], strokeWidth);
-      }
+  let textIndex = 0;
+  let cursor = state.fontSize * 0.45;
+  while (cursor < polyline.total) {
+    const char = text[textIndex % text.length];
+    const spacing = Math.max(state.fontSize * 0.55, context.measureText(char).width * state.spacing);
+    const point = pointAtLength(polyline, cursor);
+    if (point) {
+      drawCharAt(point, char, strokeWidth);
     }
-  } else {
-    let textIndex = 0;
-    let cursor = state.fontSize * 0.45;
-    while (cursor < polyline.total) {
-      const char = text[textIndex % text.length];
-      const spacing = Math.max(state.fontSize * 0.55, context.measureText(char).width * state.spacing);
-      const point = pointAtLength(polyline, cursor);
-      if (point) {
-        drawCharAt(point, char, strokeWidth);
-      }
-      cursor += spacing;
-      textIndex += 1;
-    }
+    cursor += spacing;
+    textIndex += 1;
   }
 
   context.restore();
@@ -552,6 +449,31 @@ function drawPrompt() {
   context.restore();
 }
 
+// 單人繩：只固定頭頂，整條自由垂掛，外加一點側向力讓它偏左或偏右垂（而非正面直直垂下）。
+function singleSpec(head) {
+  const gravityMag = state.gravity * clamp(state.height / 720, 0.7, 1.7);
+  const lean = head.x < state.width / 2 ? -1 : 1; // 往畫面外側垂，避免擋住臉
+  return {
+    key: `single-${head.id}`,
+    pins: [{ index: 0, point: head }],
+    totalLength: state.height * state.ropeLength,
+    leanX: gravityMag * leanFactor * lean
+  };
+}
+
+// 雙人繩：兩端各固定在一顆頭頂，受重力在中間自然下垂成弧（同「玩弄文字於指尖」雙手相連）。
+function pairSpec(key, p1, p2) {
+  return {
+    key,
+    pins: [
+      { index: 0, point: p1 },
+      { index: nodeCount - 1, point: p2 }
+    ],
+    totalLength: Math.max(distance(p1, p2) * 1.18, state.width * 0.12),
+    leanX: 0
+  };
+}
+
 function buildRopeSpecs() {
   const people = state.people;
   const maxDist = (state.width * state.maxDistPct) / 100;
@@ -561,8 +483,7 @@ function buildRopeSpecs() {
   }
 
   if (people.length === 1) {
-    const person = people[0];
-    return [{ kind: "single", key: `single-${person.id}`, head: person }];
+    return [singleSpec(people[0])];
   }
 
   const specs = [];
@@ -603,12 +524,12 @@ function buildRopeSpecs() {
 
     const left = a.id === minId ? a : nearest;
     const right = a.id === minId ? nearest : a;
-    specs.push({ kind: "pair", key, p1: left, p2: right });
+    specs.push(pairSpec(key, left, right));
   }
 
   for (const person of people) {
     if (degree.get(person.id) === 0) {
-      specs.push({ kind: "single", key: `single-${person.id}`, head: person });
+      specs.push(singleSpec(person));
     }
   }
 
@@ -634,11 +555,8 @@ function updateAndDrawRopes() {
   }
 
   for (const spec of specs) {
-    if (spec.kind === "single") {
-      drawTextRope(updateSingleRope(spec.key, spec.head), false);
-    } else {
-      drawTextRope(updatePairRope(spec.key, spec.p1, spec.p2), true);
-    }
+    const rope = updateRope(spec.key, spec.pins, spec.totalLength, spec.leanX);
+    drawTextRope(rope);
   }
 }
 
