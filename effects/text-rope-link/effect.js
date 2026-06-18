@@ -8,8 +8,10 @@ const textInput = document.createElement("input");
 
 const nodeCount = 24;
 const constraintIterations = 8;
-// 單人繩往側邊垂掛的力道（相對重力的比例）：讓繩子不要正面直直垂下，而是稍微偏左或偏右。
-const leanFactor = 0.4;
+const pairReleaseFactor = 1.12;
+const anchorFollow = 0.62;
+const anchorVelocityBlend = 0.65;
+const anchorPrediction = 0.35;
 const defaultText = "文字繩連連看";
 const errorMessage =
   "請允許相機權限，並確認瀏覽器支援 getUserMedia。建議用 start.bat 啟動本機伺服器後再開啟效果。";
@@ -167,6 +169,26 @@ function distance(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+function pairKey(a, b) {
+  const minId = Math.min(a.id, b.id);
+  const maxId = Math.max(a.id, b.id);
+  return `pair-${minId}-${maxId}`;
+}
+
+function predictedPoint(person) {
+  return {
+    id: person.id,
+    x: person.x + (person.vx || 0) * anchorPrediction,
+    y: person.y + (person.vy || 0) * anchorPrediction,
+    size: person.size,
+    // 鼻尖與頭頂同屬一顆頭、移動一致，沿用同一組速度做預測，給單人繩當固定端。
+    nose: {
+      x: person.nx + (person.vx || 0) * anchorPrediction,
+      y: person.ny + (person.vy || 0) * anchorPrediction
+    }
+  };
+}
+
 function resize() {
   state.width = Math.max(1, shell.container.clientWidth || window.innerWidth);
   state.height = Math.max(1, shell.container.clientHeight || window.innerHeight);
@@ -194,9 +216,18 @@ function detectionToPerson(detection) {
   // FaceDetector 的框大致涵蓋眉眼到下巴，框上緣偏眼睛高度；往上推約 0.55 個框高才接近頭頂（頭冠）。
   const headTopY = (bb.originY - bb.height * 0.55) * sy;
 
+  // FaceDetector 第 3 個關鍵點是鼻尖（normalized 座標）；單人繩會黏在鼻子上。沒有關鍵點時退而用臉框中段。
+  const noseKp = (detection.keypoints || [])[2];
+  const noseX = noseKp ? state.width - noseKp.x * state.width : state.width - cx * sx;
+  const noseY = noseKp
+    ? clamp(noseKp.y * state.height, 0, state.height)
+    : clamp((bb.originY + bb.height * 0.45) * sy, 0, state.height);
+
   return {
     x: state.width - cx * sx,
     y: clamp(headTopY, 0, state.height),
+    noseX,
+    noseY,
     size: Math.max(bb.width * sx, 24)
   };
 }
@@ -224,8 +255,17 @@ function updatePeople(detections) {
     }
 
     if (nearest) {
-      nearest.x += (match.x - nearest.x) * 0.4;
-      nearest.y += (match.y - nearest.y) * 0.4;
+      const previousX = nearest.x;
+      const previousY = nearest.y;
+      const nextX = nearest.x + (match.x - nearest.x) * anchorFollow;
+      const nextY = nearest.y + (match.y - nearest.y) * anchorFollow;
+      // 頭頂點來自臉框推估，保留一點速度可減少慢半拍，同時仍壓住單幀抖動。
+      nearest.vx = (nearest.vx || 0) * (1 - anchorVelocityBlend) + (nextX - previousX) * anchorVelocityBlend;
+      nearest.vy = (nearest.vy || 0) * (1 - anchorVelocityBlend) + (nextY - previousY) * anchorVelocityBlend;
+      nearest.x = nextX;
+      nearest.y = nextY;
+      nearest.nx += (match.noseX - nearest.nx) * anchorFollow;
+      nearest.ny += (match.noseY - nearest.ny) * anchorFollow;
       nearest.size += (match.size - nearest.size) * 0.3;
       nearest.miss = 0;
       nearest.matched = true;
@@ -235,6 +275,10 @@ function updatePeople(detections) {
         id: state.nextPersonId,
         x: match.x,
         y: match.y,
+        nx: match.noseX,
+        ny: match.noseY,
+        vx: 0,
+        vy: 0,
         size: match.size,
         miss: 0,
         matched: true
@@ -245,6 +289,12 @@ function updatePeople(detections) {
 
   for (const person of state.people) {
     if (!person.matched) {
+      person.x += (person.vx || 0) * 0.35;
+      person.y += (person.vy || 0) * 0.35;
+      person.nx += (person.vx || 0) * 0.35;
+      person.ny += (person.vy || 0) * 0.35;
+      person.vx = (person.vx || 0) * 0.72;
+      person.vy = (person.vy || 0) * 0.72;
       person.miss += 1;
     }
   }
@@ -282,7 +332,7 @@ function makeRope(key, pins, totalLength) {
     }
   }
 
-  return { key, nodes, restLength, leanX: 0 };
+  return { key, nodes, restLength };
 }
 
 function setFixedNode(node, point) {
@@ -295,7 +345,6 @@ function setFixedNode(node, point) {
 
 function integrate(rope) {
   const gravity = state.gravity * clamp(state.height / 720, 0.7, 1.7);
-  const lean = rope.leanX || 0;
   for (const node of rope.nodes) {
     if (node.fixed) {
       continue;
@@ -304,7 +353,7 @@ function integrate(rope) {
     const vy = (node.y - node.py) * 0.96;
     node.px = node.x;
     node.py = node.y;
-    node.x += vx + lean;
+    node.x += vx;
     node.y += vy + gravity;
   }
 }
@@ -337,7 +386,7 @@ function satisfyConstraints(rope) {
   }
 }
 
-function updateRope(key, pins, totalLength, leanX) {
+function updateRope(key, pins, totalLength) {
   let rope = state.ropes.get(key);
   if (!rope || Math.abs(rope.nodes.length * rope.restLength - totalLength) > state.height * 0.25) {
     rope = makeRope(key, pins, totalLength);
@@ -345,7 +394,6 @@ function updateRope(key, pins, totalLength, leanX) {
   }
 
   rope.restLength = totalLength / (nodeCount - 1);
-  rope.leanX = leanX || 0;
   for (const node of rope.nodes) {
     node.fixed = false;
   }
@@ -449,15 +497,12 @@ function drawPrompt() {
   context.restore();
 }
 
-// 單人繩：只固定頭頂，整條自由垂掛，外加一點側向力讓它偏左或偏右垂（而非正面直直垂下）。
+// 單人繩固定在鼻子上，另一端自由垂下，靠鼻尖錨點移動與重力自然擺動。
 function singleSpec(head) {
-  const gravityMag = state.gravity * clamp(state.height / 720, 0.7, 1.7);
-  const lean = head.x < state.width / 2 ? -1 : 1; // 往畫面外側垂，避免擋住臉
   return {
     key: `single-${head.id}`,
-    pins: [{ index: 0, point: head }],
-    totalLength: state.height * state.ropeLength,
-    leanX: gravityMag * leanFactor * lean
+    pins: [{ index: 0, point: head.nose }],
+    totalLength: state.height * state.ropeLength
   };
 }
 
@@ -469,14 +514,14 @@ function pairSpec(key, p1, p2) {
       { index: 0, point: p1 },
       { index: nodeCount - 1, point: p2 }
     ],
-    totalLength: Math.max(distance(p1, p2) * 1.18, state.width * 0.12),
-    leanX: 0
+    totalLength: Math.max(distance(p1, p2) * 1.18, state.width * 0.12)
   };
 }
 
 function buildRopeSpecs() {
-  const people = state.people;
+  const people = state.people.map(predictedPoint);
   const maxDist = (state.width * state.maxDistPct) / 100;
+  const releaseDist = maxDist * pairReleaseFactor;
 
   if (people.length === 0) {
     return [];
@@ -488,10 +533,41 @@ function buildRopeSpecs() {
 
   const specs = [];
   const degree = new Map(people.map((person) => [person.id, 0]));
+  const peopleById = new Map(people.map((person) => [person.id, person]));
   const edgeKeys = new Set();
-  // 每個人各自連到「離自己最近的另一個人」：互為最近時兩邊會產生同一條邊，用 edgeKeys 去重只畫一條。
+
+  function addPair(a, b) {
+    const key = pairKey(a, b);
+    if (edgeKeys.has(key)) {
+      return;
+    }
+    edgeKeys.add(key);
+    degree.set(a.id, degree.get(a.id) + 1);
+    degree.set(b.id, degree.get(b.id) + 1);
+    const left = a.id < b.id ? a : b;
+    const right = a.id < b.id ? b : a;
+    specs.push(pairSpec(key, left, right));
+  }
+
+  // 已存在的連線給一點斷開滯後，避免臉框單幀抖動讓 Verlet 狀態被重建。
+  for (const key of state.ropes.keys()) {
+    const match = /^pair-(\d+)-(\d+)$/.exec(key);
+    if (!match) {
+      continue;
+    }
+    const a = peopleById.get(Number(match[1]));
+    const b = peopleById.get(Number(match[2]));
+    if (a && b && distance(a, b) <= releaseDist) {
+      addPair(a, b);
+    }
+  }
+
+  // 每個人各自連到「離自己最近的另一個人」；已保留的舊連線優先，降低跳線。
   for (let i = 0; i < people.length; i += 1) {
     const a = people[i];
+    if (degree.get(a.id) > 0) {
+      continue;
+    }
     let nearest = null;
     let nearestDistance = Infinity;
     for (let j = 0; j < people.length; j += 1) {
@@ -510,21 +586,7 @@ function buildRopeSpecs() {
       continue;
     }
 
-    // 兩端都標記為已連上；互為最近時兩次迴圈都會跑到，degree 一律 >0。
-    degree.set(a.id, degree.get(a.id) + 1);
-    degree.set(nearest.id, degree.get(nearest.id) + 1);
-
-    const minId = Math.min(a.id, nearest.id);
-    const maxId = Math.max(a.id, nearest.id);
-    const key = `pair-${minId}-${maxId}`;
-    if (edgeKeys.has(key)) {
-      continue;
-    }
-    edgeKeys.add(key);
-
-    const left = a.id === minId ? a : nearest;
-    const right = a.id === minId ? nearest : a;
-    specs.push(pairSpec(key, left, right));
+    addPair(a, nearest);
   }
 
   for (const person of people) {
@@ -555,7 +617,7 @@ function updateAndDrawRopes() {
   }
 
   for (const spec of specs) {
-    const rope = updateRope(spec.key, spec.pins, spec.totalLength, spec.leanX);
+    const rope = updateRope(spec.key, spec.pins, spec.totalLength);
     drawTextRope(rope);
   }
 }
