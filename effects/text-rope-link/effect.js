@@ -6,7 +6,7 @@ const context = canvas.getContext("2d");
 const video = document.createElement("video");
 const textInput = document.createElement("input");
 
-const nodeCount = 24;
+const nodeCount = 32;
 const constraintIterations = 8;
 const pairReleaseFactor = 1.12;
 const anchorFollow = 0.62;
@@ -32,7 +32,8 @@ const state = {
   color: "#ffffff",
   maxDistPct: 55,
   gravity: 1.2,
-  ropeLength: 0.45
+  ropeLength: 0.45,
+  softness: 0.72
 };
 
 canvas.style.position = "absolute";
@@ -154,6 +155,19 @@ shell.addParam({
   value: state.ropeLength,
   onChange(value) {
     state.ropeLength = value;
+  }
+});
+
+shell.addParam({
+  key: "softness",
+  type: "range",
+  label: "晃動柔軟度",
+  min: 0,
+  max: 1,
+  step: 0.05,
+  value: state.softness,
+  onChange(value) {
+    state.softness = value;
   }
 });
 
@@ -345,12 +359,14 @@ function setFixedNode(node, point) {
 
 function integrate(rope) {
   const gravity = state.gravity * clamp(state.height / 720, 0.7, 1.7);
+  // 柔軟度越高，速度保留越多（阻尼越小），晃動能甩起、落下會有自然的反作用慣性。
+  const damping = 0.95 + state.softness * 0.045;
   for (const node of rope.nodes) {
     if (node.fixed) {
       continue;
     }
-    const vx = (node.x - node.px) * 0.96;
-    const vy = (node.y - node.py) * 0.96;
+    const vx = (node.x - node.px) * damping;
+    const vy = (node.y - node.py) * damping;
     node.px = node.x;
     node.py = node.y;
     node.x += vx;
