@@ -35,7 +35,8 @@ const state = {
   maxDistPct: 55,
   gravity: 1.2,
   ropeLength: 0.45,
-  softness: 0.72
+  softness: 0.72,
+  whip: 0.3
 };
 
 canvas.style.position = "absolute";
@@ -173,6 +174,19 @@ shell.addParam({
   }
 });
 
+shell.addParam({
+  key: "whip",
+  type: "range",
+  label: "甩動誇張度（單人）",
+  min: 0,
+  max: 1,
+  step: 0.05,
+  value: state.whip,
+  onChange(value) {
+    state.whip = value;
+  }
+});
+
 textInput.addEventListener("input", () => {
   state.text = textInput.value || textInput.placeholder;
 });
@@ -197,10 +211,11 @@ function predictedPoint(person) {
     x: person.x + (person.vx || 0) * anchorPrediction,
     y: person.y + (person.vy || 0) * anchorPrediction,
     size: person.size,
-    // 鼻尖與頭頂同屬一顆頭、移動一致，沿用同一組速度做預測，給單人繩當固定端。
+    // 單人繩的鼻尖固定端往「頭部移動方向」超前一段（甩動誇張度越大超前越多）：
+    // 甩頭時錨點先衝出去把繩子帶起來，頭停下時錨點縮回鼻尖、繩子甩回，形成像鼻涕般的大幅甩動與反作用。
     nose: {
-      x: person.nx + (person.vx || 0) * anchorPrediction,
-      y: person.ny + (person.vy || 0) * anchorPrediction
+      x: person.nx + (person.vx || 0) * state.whip * 4.5,
+      y: person.ny + (person.vy || 0) * state.whip * 4.5
     }
   };
 }
