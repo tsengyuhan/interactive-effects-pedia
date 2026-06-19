@@ -36,7 +36,8 @@ const state = {
   gravity: 1.2,
   ropeLength: 0.45,
   softness: 0.72,
-  whip: 0.3
+  whip: 0.3,
+  flowSpeed: 0.4
 };
 
 canvas.style.position = "absolute";
@@ -184,6 +185,19 @@ shell.addParam({
   value: state.whip,
   onChange(value) {
     state.whip = value;
+  }
+});
+
+shell.addParam({
+  key: "flowSpeed",
+  type: "range",
+  label: "文字流動速度（雙人，0＝靜止）",
+  min: 0,
+  max: 1,
+  step: 0.05,
+  value: state.flowSpeed,
+  onChange(value) {
+    state.flowSpeed = value;
   }
 });
 
@@ -478,7 +492,7 @@ function drawCharAt(point, char, strokeWidth) {
   context.restore();
 }
 
-function drawTextRope(rope) {
+function drawTextRope(rope, flowing) {
   const text = state.text.trim() || defaultText;
   const polyline = getPolylineSamples(rope.nodes);
   if (polyline.total < 4) {
@@ -498,17 +512,37 @@ function drawTextRope(rope) {
   context.shadowColor = "rgba(0, 0, 0, 0.56)";
   context.shadowBlur = 7;
 
-  let textIndex = 0;
-  let cursor = state.fontSize * 0.45;
-  while (cursor < polyline.total) {
-    const char = text[textIndex % text.length];
-    const spacing = Math.max(state.fontSize * 0.55, context.measureText(char).width * state.spacing);
-    const point = pointAtLength(polyline, cursor);
-    if (point) {
-      drawCharAt(point, char, strokeWidth);
+  if (flowing && state.flowSpeed > 0) {
+    // 雙人繩：整串文字以固定間距沿弧長隨時間平移，呈現「文字流動」。方向在連線形成時隨機決定。
+    if (rope.flow === undefined) {
+      rope.flow = 0;
+      rope.direction = Math.random() < 0.5 ? 1 : -1;
     }
-    cursor += spacing;
-    textIndex += 1;
+    const sample = context.measureText(text[0] || "字").width;
+    const spacing = Math.max(state.fontSize * 0.55, sample * state.spacing);
+    rope.flow += spacing * state.flowSpeed * 0.05 * rope.direction;
+    const len = text.length;
+    const jMin = Math.ceil(rope.flow / spacing);
+    const jMax = Math.floor((rope.flow + polyline.total) / spacing);
+    for (let j = jMin; j <= jMax; j += 1) {
+      const point = pointAtLength(polyline, j * spacing - rope.flow);
+      if (point) {
+        drawCharAt(point, text[((j % len) + len) % len], strokeWidth);
+      }
+    }
+  } else {
+    let textIndex = 0;
+    let cursor = state.fontSize * 0.45;
+    while (cursor < polyline.total) {
+      const char = text[textIndex % text.length];
+      const spacing = Math.max(state.fontSize * 0.55, context.measureText(char).width * state.spacing);
+      const point = pointAtLength(polyline, cursor);
+      if (point) {
+        drawCharAt(point, char, strokeWidth);
+      }
+      cursor += spacing;
+      textIndex += 1;
+    }
   }
 
   context.restore();
@@ -548,7 +582,8 @@ function pairSpec(key, p1, p2) {
       { index: 0, point: p1 },
       { index: nodeCount - 1, point: p2 }
     ],
-    totalLength: Math.max(distance(p1, p2) * 1.18, state.width * 0.12)
+    totalLength: Math.max(distance(p1, p2) * 1.18, state.width * 0.12),
+    flowing: true
   };
 }
 
@@ -652,7 +687,7 @@ function updateAndDrawRopes() {
 
   for (const spec of specs) {
     const rope = updateRope(spec.key, spec.pins, spec.totalLength);
-    drawTextRope(rope);
+    drawTextRope(rope, spec.flowing);
   }
 }
 
