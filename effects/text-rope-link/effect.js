@@ -28,8 +28,8 @@ const state = {
   people: [],
   ropes: new Map(),
   text: defaultText,
-  fontSize: 26,
-  spacing: 1,
+  fontSize: 20,
+  spacing: 1.5,
   weight: 6,
   color: "#ffffff",
   maxDistPct: 55,
@@ -225,11 +225,10 @@ function predictedPoint(person) {
     x: person.x + (person.vx || 0) * anchorPrediction,
     y: person.y + (person.vy || 0) * anchorPrediction,
     size: person.size,
-    // 單人繩的鼻尖固定端往「頭部移動方向」超前一段（甩動誇張度越大超前越多）：
-    // 甩頭時錨點先衝出去把繩子帶起來，頭停下時錨點縮回鼻尖、繩子甩回，形成像鼻涕般的大幅甩動與反作用。
+    // 鼻尖固定端只做小幅速度預測（穩定不抖）；甩動的「彎曲與延遲」交給繩身鬆軟度（見 singleSpec）處理。
     nose: {
-      x: person.nx + (person.vx || 0) * state.whip * 4.5,
-      y: person.ny + (person.vy || 0) * state.whip * 4.5
+      x: person.nx + (person.vx || 0) * 0.6,
+      y: person.ny + (person.vy || 0) * 0.6
     }
   };
 }
@@ -406,8 +405,9 @@ function integrate(rope) {
   }
 }
 
-function satisfyConstraints(rope) {
-  for (let iteration = 0; iteration < constraintIterations; iteration += 1) {
+// iterations 越少＝繩身越鬆軟：節點不會在一幀內就追上固定端，甩動時尾端逐節延遲，呈現彎曲的鞭狀拖尾。
+function satisfyConstraints(rope, iterations) {
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
     for (let i = 0; i < rope.nodes.length - 1; i += 1) {
       const a = rope.nodes[i];
       const b = rope.nodes[i + 1];
@@ -434,7 +434,7 @@ function satisfyConstraints(rope) {
   }
 }
 
-function updateRope(key, pins, totalLength) {
+function updateRope(key, pins, totalLength, iterations) {
   let rope = state.ropes.get(key);
   if (!rope || Math.abs(rope.nodes.length * rope.restLength - totalLength) > state.height * 0.25) {
     rope = makeRope(key, pins, totalLength);
@@ -450,7 +450,7 @@ function updateRope(key, pins, totalLength) {
   }
 
   integrate(rope);
-  satisfyConstraints(rope);
+  satisfyConstraints(rope, iterations);
   return rope;
 }
 
@@ -565,12 +565,14 @@ function drawPrompt() {
   context.restore();
 }
 
-// 單人繩固定在鼻子上，另一端自由垂下，靠鼻尖錨點移動與重力自然擺動。
+// 單人繩固定在鼻子上，另一端自由垂下。甩動誇張度越大＝約束迭代越少＝繩身越鬆軟，
+// 甩動時尾端逐節延遲、彎曲拖尾越明顯（每個字像有各自的加速度與延遲）。
 function singleSpec(head) {
   return {
     key: `single-${head.id}`,
     pins: [{ index: 0, point: head.nose }],
-    totalLength: state.height * state.ropeLength
+    totalLength: state.height * state.ropeLength,
+    iterations: clamp(Math.round(constraintIterations - state.whip * 5), 3, constraintIterations)
   };
 }
 
@@ -583,6 +585,7 @@ function pairSpec(key, p1, p2) {
       { index: nodeCount - 1, point: p2 }
     ],
     totalLength: Math.max(distance(p1, p2) * 1.18, state.width * 0.12),
+    iterations: constraintIterations,
     flowing: true
   };
 }
@@ -686,7 +689,7 @@ function updateAndDrawRopes() {
   }
 
   for (const spec of specs) {
-    const rope = updateRope(spec.key, spec.pins, spec.totalLength);
+    const rope = updateRope(spec.key, spec.pins, spec.totalLength, spec.iterations);
     drawTextRope(rope, spec.flowing);
   }
 }
