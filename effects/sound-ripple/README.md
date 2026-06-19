@@ -7,7 +7,26 @@
 - Web Audio API
 - getUserMedia
 - Canvas 2D
+- WebGL / GLSL
 - 高度場水波模擬
+
+參數面板可切換「2D Canvas」與「WebGL」渲染模式；兩者共用同一套聲音分析與高度場水波模擬，只替換最後的畫面輸出管線。
+
+## 兩種渲染模式比較
+
+同一條折射＋打光公式，差別只在「誰來算」：
+
+- **2D Canvas（CPU 串列）**：JS 迴圈逐像素計算、`putImageData` 輸出。優點是直覺、好除錯、相容性最好、無前置成本；缺點是像素一多就佔用主執行緒、容易掉幀。
+- **WebGL（GPU 平行）**：fragment shader 上千核心同時算每個像素。優點是逐像素運算近乎免費、畫面越大越複雜越划算、主執行緒更穩；缺點是程式較複雜（context／shader／texture／Y 軸方向都要顧）、依賴 GPU 與 `OES_texture_float` 擴充、有建 context 與上傳 texture 的固定開銷。
+
+目前在輕量設定下（`water.scale = 2` 只算 1/4 像素、模擬與高度場打包仍在 CPU）兩者效能打平、畫面一致，WebGL 是為日後加重預留的升級空間。
+
+## 未來可嘗試方向
+
+- 把水波模擬本身（`simulateWater`）也搬進 shader（ping-pong framebuffer），讓 CPU 幾乎只處理聲音，WebGL 差距才會真正拉開。
+- 將 `water.scale` 調為 1（全解析度）或拉到全螢幕大尺寸，壓力測試兩模式差距。
+- 在 WebGL 模式疊加更重的水面特效（反射、焦散、模糊），這類效果在 shader 內幾乎只是加幾行。
+- 加上 FPS 顯示，量化比較兩模式在重負載下的表現。
 
 ## 需求
 

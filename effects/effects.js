@@ -58,12 +58,12 @@ window.EFFECTS = [
     id: "sound-ripple",
     title: "聲音漣漪",
     category: "聲音互動",
-    description: "對著鏡頭與麥克風發聲，畫面會像湖面倒影般盪開漣漪",
+    description: "對著鏡頭與麥克風發聲，畫面會像湖面倒影般盪開漣漪，可切換 2D Canvas／WebGL 兩種渲染",
     instructions: "面對鏡頭，對麥克風說話、拍手或哼聲；每次起音會投入一滴水，聲音越大漣漪越大，音高越高落點越靠上方",
-    tech: ["Web Audio API", "getUserMedia", "Canvas 2D", "高度場水波模擬"],
+    tech: ["Web Audio API", "getUserMedia", "Canvas 2D", "WebGL", "GLSL", "高度場水波模擬"],
     principle: [
       "麥克風訊號經 AnalyserNode 取出波形，算 RMS 得音量，自相關法估音高",
-      "鏡頭畫面作為水面倒影，漣漪以高度場梯度對畫面做折射位移",
+      "鏡頭畫面作為水面倒影，漣漪以高度場梯度對畫面做折射位移，輸出可在 2D Canvas 與 WebGL shader 間切換",
       "音量只在跨過門檻的起音瞬間投滴，音量決定能量，音高調整落點高度與衰減率"
     ],
     requirements: ["攝影機", "麥克風", "建議 Chrome / Edge", "需經 start.bat 或 HTTPS 開啟"],

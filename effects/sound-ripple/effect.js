@@ -4,6 +4,7 @@
   const shell = Shell.init({ id: "sound-ripple" });
   const video = document.createElement("video");
   const canvas = document.createElement("canvas");
+  const glCanvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
   const sourceCanvas = document.createElement("canvas");
   const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
@@ -25,6 +26,7 @@
     wasAboveThreshold: false
   };
   const state = {
+    renderMode: "2d",
     threshold: -30
   };
 
@@ -44,12 +46,31 @@
     height: 1,
     animationId: 0
   };
+  let renderModeControl = null;
+
+  const glState = {
+    gl: null,
+    program: null,
+    positionBuffer: null,
+    cameraTexture: null,
+    heightTexture: null,
+    heightPixels: null,
+    locations: null,
+    available: false,
+    warned: false
+  };
 
   canvas.style.position = "absolute";
   canvas.style.inset = "0";
   canvas.style.width = "100%";
   canvas.style.height = "100%";
   canvas.style.display = "block";
+
+  glCanvas.style.position = "absolute";
+  glCanvas.style.inset = "0";
+  glCanvas.style.width = "100%";
+  glCanvas.style.height = "100%";
+  glCanvas.style.display = "none";
 
   video.autoplay = true;
   video.muted = true;
@@ -70,8 +91,22 @@
   meter.style.backdropFilter = "blur(14px)";
 
   shell.container.style.background = "#0d3b46";
-  shell.container.append(video, canvas, meter);
+  shell.container.append(video, canvas, glCanvas, meter);
   context.imageSmoothingEnabled = true;
+
+  renderModeControl = shell.addParam({
+    type: "select",
+    key: "renderMode",
+    label: "渲染模式",
+    value: state.renderMode,
+    options: [
+      { value: "2d", label: "2D Canvas" },
+      { value: "webgl", label: "WebGL" }
+    ],
+    onChange(value) {
+      switchRenderMode(value);
+    }
+  });
 
   shell.addParam({
     type: "range",
@@ -98,11 +133,43 @@
     return a + (b - a) * amount;
   }
 
+  function warnWebGL(message, error) {
+    if (!glState.warned) {
+      console.warn(message, error || "");
+      glState.warned = true;
+    }
+  }
+
+  function setCanvasVisibility() {
+    const useWebGL = state.renderMode === "webgl" && glState.available;
+    canvas.style.display = useWebGL ? "none" : "block";
+    glCanvas.style.display = useWebGL ? "block" : "none";
+  }
+
+  function switchRenderMode(value) {
+    if (value === "webgl") {
+      if (!ensureWebGL()) {
+        state.renderMode = "2d";
+        if (renderModeControl) {
+          renderModeControl.value = "2d";
+        }
+        setCanvasVisibility();
+        return;
+      }
+      state.renderMode = "webgl";
+    } else {
+      state.renderMode = "2d";
+    }
+    setCanvasVisibility();
+  }
+
   function resize() {
     display.width = Math.max(1, shell.container.clientWidth || window.innerWidth);
     display.height = Math.max(1, shell.container.clientHeight || window.innerHeight);
     canvas.width = Math.floor(display.width);
     canvas.height = Math.floor(display.height);
+    glCanvas.width = Math.floor(display.width);
+    glCanvas.height = Math.floor(display.height);
     context.imageSmoothingEnabled = true;
 
     water.width = Math.max(2, Math.floor(display.width / water.scale));
@@ -114,6 +181,173 @@
     bufferCanvas.width = water.width;
     bufferCanvas.height = water.height;
     water.image = bufferContext.createImageData(water.width, water.height);
+    resizeWebGLResources();
+  }
+
+  function compileShader(gl, type, source) {
+    const shader = gl.createShader(type);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      const message = gl.getShaderInfoLog(shader) || "shader compile failed";
+      gl.deleteShader(shader);
+      throw new Error(message);
+    }
+    return shader;
+  }
+
+  function createProgram(gl) {
+    const vertexShader = compileShader(gl, gl.VERTEX_SHADER, `
+      attribute vec2 a_position;
+      varying vec2 v_uv;
+
+      void main() {
+        v_uv = a_position * 0.5 + 0.5;
+        gl_Position = vec4(a_position, 0.0, 1.0);
+      }
+    `);
+    const fragmentShader = compileShader(gl, gl.FRAGMENT_SHADER, `
+      precision highp float;
+
+      uniform sampler2D u_camera;
+      uniform sampler2D u_height;
+      uniform vec2 u_texel;
+      varying vec2 v_uv;
+
+      float heightAt(vec2 uv) {
+        vec2 fieldUv = vec2(uv.x, 1.0 - uv.y);
+        return texture2D(u_height, clamp(fieldUv, vec2(0.0), vec2(1.0))).r;
+      }
+
+      void main() {
+        float gx = heightAt(v_uv + vec2(u_texel.x, 0.0)) - heightAt(v_uv - vec2(u_texel.x, 0.0));
+        float gy = heightAt(v_uv - vec2(0.0, u_texel.y)) - heightAt(v_uv + vec2(0.0, u_texel.y));
+        vec2 offset = clamp(vec2(gx, -gy) * 0.035, vec2(-14.0), vec2(14.0)) * u_texel;
+        vec4 source = texture2D(u_camera, clamp(v_uv + offset, vec2(0.0), vec2(1.0)));
+        float gradientStrength = clamp(abs(gx) * 0.012 + abs(gy) * 0.012, 0.0, 1.0);
+        float shade = clamp(gy * 0.018 - gx * 0.01, -0.18, 0.34);
+        float highlight = gradientStrength * 54.0 / 255.0;
+        vec3 color = vec3(
+          source.r * 0.82 + 18.0 / 255.0 + shade * 70.0 / 255.0 + highlight,
+          source.g * 0.88 + 34.0 / 255.0 + shade * 88.0 / 255.0 + highlight,
+          source.b * 0.94 + 42.0 / 255.0 + shade * 98.0 / 255.0 + highlight * 1.15
+        );
+        gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+      }
+    `);
+    const program = gl.createProgram();
+    gl.attachShader(program, vertexShader);
+    gl.attachShader(program, fragmentShader);
+    gl.linkProgram(program);
+    gl.deleteShader(vertexShader);
+    gl.deleteShader(fragmentShader);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      const message = gl.getProgramInfoLog(program) || "program link failed";
+      gl.deleteProgram(program);
+      throw new Error(message);
+    }
+    return program;
+  }
+
+  function createTexture(gl) {
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    return texture;
+  }
+
+  function ensureWebGL() {
+    if (glState.available) {
+      return true;
+    }
+
+    try {
+      const gl = glCanvas.getContext("webgl") || glCanvas.getContext("experimental-webgl");
+      if (!gl) {
+        throw new Error("WebGL context unavailable");
+      }
+      if (!gl.getExtension("OES_texture_float")) {
+        throw new Error("OES_texture_float unavailable");
+      }
+
+      const program = createProgram(gl);
+      const positionBuffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        -1, -1,
+        1, -1,
+        -1, 1,
+        -1, 1,
+        1, -1,
+        1, 1
+      ]), gl.STATIC_DRAW);
+
+      glState.gl = gl;
+      glState.program = program;
+      glState.positionBuffer = positionBuffer;
+      glState.cameraTexture = createTexture(gl);
+      glState.heightTexture = createTexture(gl);
+      glState.locations = {
+        position: gl.getAttribLocation(program, "a_position"),
+        camera: gl.getUniformLocation(program, "u_camera"),
+        height: gl.getUniformLocation(program, "u_height"),
+        texel: gl.getUniformLocation(program, "u_texel")
+      };
+      glState.available = true;
+      resizeWebGLResources();
+      return true;
+    } catch (error) {
+      releaseWebGLResources();
+      warnWebGL("WebGL 渲染模式初始化失敗，已回退 2D Canvas。", error);
+      return false;
+    }
+  }
+
+  function resizeWebGLResources() {
+    if (!glState.available || !glState.gl) {
+      return;
+    }
+    const gl = glState.gl;
+    gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+    glState.heightPixels = new Float32Array(water.width * water.height * 4);
+
+    // 高度場使用 float texture，避免 CPU 端打包失真，讓 WebGL 與 2D 共用同一份水波資料。
+    gl.bindTexture(gl.TEXTURE_2D, glState.heightTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, water.width, water.height, 0, gl.RGBA, gl.FLOAT, glState.heightPixels);
+
+    gl.bindTexture(gl.TEXTURE_2D, glState.cameraTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, water.width, water.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  }
+
+  function releaseWebGLResources() {
+    const gl = glState.gl;
+    if (gl) {
+      if (glState.cameraTexture) {
+        gl.deleteTexture(glState.cameraTexture);
+      }
+      if (glState.heightTexture) {
+        gl.deleteTexture(glState.heightTexture);
+      }
+      if (glState.positionBuffer) {
+        gl.deleteBuffer(glState.positionBuffer);
+      }
+      if (glState.program) {
+        gl.deleteProgram(glState.program);
+      }
+    }
+    glState.gl = null;
+    glState.program = null;
+    glState.positionBuffer = null;
+    glState.cameraTexture = null;
+    glState.heightTexture = null;
+    glState.heightPixels = null;
+    glState.locations = null;
+    glState.available = false;
   }
 
   function gaussian() {
@@ -217,7 +451,7 @@
     water.sourceImage = sourceContext.getImageData(0, 0, water.width, water.height);
   }
 
-  function renderWater() {
+  function renderWater2D() {
     const w = water.width;
     const h = water.height;
     const field = water.previous;
@@ -253,6 +487,53 @@
     bufferContext.putImageData(water.image, 0, 0);
     context.clearRect(0, 0, display.width, display.height);
     context.drawImage(bufferCanvas, 0, 0, display.width, display.height);
+  }
+
+  function uploadHeightTexture() {
+    const pixels = glState.heightPixels;
+    const field = water.previous;
+    for (let i = 0; i < field.length; i += 1) {
+      pixels[i * 4] = field[i];
+      pixels[i * 4 + 1] = 0;
+      pixels[i * 4 + 2] = 0;
+      pixels[i * 4 + 3] = 1;
+    }
+  }
+
+  function renderWaterGL() {
+    if (!ensureWebGL()) {
+      state.renderMode = "2d";
+      setCanvasVisibility();
+      renderWater2D();
+      return;
+    }
+
+    drawCameraFrame();
+    uploadHeightTexture();
+
+    const gl = glState.gl;
+    const locations = glState.locations;
+    gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+    gl.useProgram(glState.program);
+    gl.bindBuffer(gl.ARRAY_BUFFER, glState.positionBuffer);
+    gl.enableVertexAttribArray(locations.position);
+    gl.vertexAttribPointer(locations.position, 2, gl.FLOAT, false, 0, 0);
+
+    // Canvas 來源需翻轉 Y，讓 WebGL 取樣座標與 2D 版同向，避免切換時畫面上下顛倒。
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, glState.cameraTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
+    gl.uniform1i(locations.camera, 0);
+
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, glState.heightTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, water.width, water.height, 0, gl.RGBA, gl.FLOAT, glState.heightPixels);
+    gl.uniform1i(locations.height, 1);
+    gl.uniform2f(locations.texel, 1 / water.width, 1 / water.height);
+
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
   function computeVolume(wave) {
@@ -329,7 +610,11 @@
     updateDamping();
     maybeDrop(now);
     simulateWater();
-    renderWater();
+    if (state.renderMode === "webgl") {
+      renderWaterGL();
+    } else {
+      renderWater2D();
+    }
     updateMeter();
     display.animationId = window.requestAnimationFrame(render);
   }
@@ -412,6 +697,7 @@
     if (audioState.context && audioState.context.state !== "closed") {
       audioState.context.close();
     }
+    releaseWebGLResources();
   });
 
   start();
