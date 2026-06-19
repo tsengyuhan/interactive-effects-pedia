@@ -10,6 +10,8 @@ const nodeCount = 32;
 const constraintIterations = 8;
 const pairReleaseFactor = 1.12;
 const anchorFollow = 0.62;
+// 單人繩的鼻尖固定端追得更生（少平滑），讓頭部移動像 text-ropes 的指尖一樣直接驅動繩子甩動。
+const noseFollow = 0.85;
 const anchorVelocityBlend = 0.65;
 const anchorPrediction = 0.35;
 const defaultText = "文字繩連連看";
@@ -278,8 +280,8 @@ function updatePeople(detections) {
       nearest.vy = (nearest.vy || 0) * (1 - anchorVelocityBlend) + (nextY - previousY) * anchorVelocityBlend;
       nearest.x = nextX;
       nearest.y = nextY;
-      nearest.nx += (match.noseX - nearest.nx) * anchorFollow;
-      nearest.ny += (match.noseY - nearest.ny) * anchorFollow;
+      nearest.nx += (match.noseX - nearest.nx) * noseFollow;
+      nearest.ny += (match.noseY - nearest.ny) * noseFollow;
       nearest.size += (match.size - nearest.size) * 0.3;
       nearest.miss = 0;
       nearest.matched = true;
@@ -360,7 +362,8 @@ function setFixedNode(node, point) {
 function integrate(rope) {
   const gravity = state.gravity * clamp(state.height / 720, 0.7, 1.7);
   // 柔軟度越高，速度保留越多（阻尼越小），晃動能甩起、落下會有自然的反作用慣性。
-  const damping = 0.95 + state.softness * 0.045;
+  // 範圍對準「自然繩感」區間：低端 0.92 較快收斂、預設約 0.967（近 text-ropes 的 0.96）、高端 0.985 飄但仍會停。
+  const damping = 0.92 + state.softness * 0.065;
   for (const node of rope.nodes) {
     if (node.fixed) {
       continue;
