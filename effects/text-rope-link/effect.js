@@ -7,7 +7,7 @@ const video = document.createElement("video");
 const textInput = document.createElement("input");
 
 const nodeCount = 32;
-const constraintIterations = 8;
+const constraintIterations = 12;
 const pairReleaseFactor = 1.12;
 const anchorFollow = 0.62;
 // 單人繩的鼻尖固定端追得更生（少平滑），讓頭部移動像 text-ropes 的指尖一樣直接驅動繩子甩動。
@@ -37,7 +37,10 @@ const state = {
   ropeLength: 0.45,
   softness: 0.72,
   whip: 0.3,
-  flowSpeed: 0.4
+  flowSpeed: 0.4,
+  dt: 1 / 60,
+  prevDt: 1 / 60,
+  lastFrameTime: 0
 };
 
 canvas.style.position = "absolute";
@@ -220,16 +223,23 @@ function pairKey(a, b) {
 }
 
 function predictedPoint(person) {
+  // 甩動誇張度＝平滑放大頭部速度去驅動鼻尖固定端：頭一動，固定端被甩出去帶動整條剛性繩，
+  // 靠繩身慣性產生逐節延遲的彎曲拖尾；頭停下時固定端盪回鼻尖。放大量經低通平滑（×0.4），避免放大雜訊造成抖動。
+  const gain = state.whip * 3;
+  const targetX = person.nx + (person.vx || 0) * gain;
+  const targetY = person.ny + (person.vy || 0) * gain;
+  if (person.pinX === undefined) {
+    person.pinX = targetX;
+    person.pinY = targetY;
+  }
+  person.pinX += (targetX - person.pinX) * 0.4;
+  person.pinY += (targetY - person.pinY) * 0.4;
   return {
     id: person.id,
     x: person.x + (person.vx || 0) * anchorPrediction,
     y: person.y + (person.vy || 0) * anchorPrediction,
     size: person.size,
-    // 鼻尖固定端只做小幅速度預測（穩定不抖）；甩動的「彎曲與延遲」交給繩身鬆軟度（見 singleSpec）處理。
-    nose: {
-      x: person.nx + (person.vx || 0) * 0.6,
-      y: person.ny + (person.vy || 0) * 0.6
-    }
+    nose: { x: person.pinX, y: person.pinY }
   };
 }
 
@@ -387,27 +397,31 @@ function setFixedNode(node, point) {
   node.fixed = true;
 }
 
+// 時間修正（dt）的 Verlet 積分：速度乘上 dt/prevDt，重力用 a*dt² —— 不同 fps 下手感一致、且更穩定。
+// 作法取自 guerrillacontra 的 stabilized verlet rope。
 function integrate(rope) {
-  const gravity = state.gravity * clamp(state.height / 720, 0.7, 1.7);
-  // 柔軟度越高，速度保留越多（阻尼越小），晃動能甩起、落下會有自然的反作用慣性。
-  // 範圍對準「自然繩感」區間：低端 0.92 較快收斂、預設約 0.967（近 text-ropes 的 0.96）、高端 0.985 飄但仍會停。
-  const damping = 0.92 + state.softness * 0.065;
+  const heightScale = clamp(state.height / 720, 0.7, 1.7);
+  const dt = state.dt;
+  const timeCorrection = state.prevDt > 0 ? dt / state.prevDt : 1;
+  // 柔軟度→阻尼（0.95~0.995）：越高保留越多動量，甩動與落下的反作用越自然。
+  const damping = 0.95 + state.softness * 0.045;
+  const gravityStep = state.gravity * 2500 * heightScale * dt * dt;
   for (const node of rope.nodes) {
     if (node.fixed) {
       continue;
     }
-    const vx = (node.x - node.px) * damping;
-    const vy = (node.y - node.py) * damping;
+    const vx = (node.x - node.px) * timeCorrection * damping;
+    const vy = (node.y - node.py) * timeCorrection * damping;
     node.px = node.x;
     node.py = node.y;
     node.x += vx;
-    node.y += vy + gravity;
+    node.y += vy + gravityStep;
   }
 }
 
-// iterations 越少＝繩身越鬆軟：節點不會在一幀內就追上固定端，甩動時尾端逐節延遲，呈現彎曲的鞭狀拖尾。
-function satisfyConstraints(rope, iterations) {
-  for (let iteration = 0; iteration < iterations; iteration += 1) {
+// 多次迭代讓繩長維持剛性（不伸縮）；甩動時的彎曲拖尾來自繩身慣性，而非鬆軟拉伸。
+function satisfyConstraints(rope) {
+  for (let iteration = 0; iteration < constraintIterations; iteration += 1) {
     for (let i = 0; i < rope.nodes.length - 1; i += 1) {
       const a = rope.nodes[i];
       const b = rope.nodes[i + 1];
@@ -434,7 +448,7 @@ function satisfyConstraints(rope, iterations) {
   }
 }
 
-function updateRope(key, pins, totalLength, iterations) {
+function updateRope(key, pins, totalLength) {
   let rope = state.ropes.get(key);
   if (!rope || Math.abs(rope.nodes.length * rope.restLength - totalLength) > state.height * 0.25) {
     rope = makeRope(key, pins, totalLength);
@@ -450,7 +464,7 @@ function updateRope(key, pins, totalLength, iterations) {
   }
 
   integrate(rope);
-  satisfyConstraints(rope, iterations);
+  satisfyConstraints(rope);
   return rope;
 }
 
@@ -565,14 +579,13 @@ function drawPrompt() {
   context.restore();
 }
 
-// 單人繩固定在鼻子上，另一端自由垂下。甩動誇張度越大＝約束迭代越少＝繩身越鬆軟，
-// 甩動時尾端逐節延遲、彎曲拖尾越明顯（每個字像有各自的加速度與延遲）。
+// 單人繩固定在鼻子上、另一端自由垂下。甩動誇張度放大鼻尖固定端的驅動（見 predictedPoint），
+// 在剛性繩身＋高阻尼下，甩動時尾端逐節延遲、彎曲拖尾（每個字像有各自的加速度與延遲）。
 function singleSpec(head) {
   return {
     key: `single-${head.id}`,
     pins: [{ index: 0, point: head.nose }],
-    totalLength: state.height * state.ropeLength,
-    iterations: clamp(Math.round(constraintIterations - state.whip * 5), 3, constraintIterations)
+    totalLength: state.height * state.ropeLength
   };
 }
 
@@ -585,7 +598,6 @@ function pairSpec(key, p1, p2) {
       { index: nodeCount - 1, point: p2 }
     ],
     totalLength: Math.max(distance(p1, p2) * 1.18, state.width * 0.12),
-    iterations: constraintIterations,
     flowing: true
   };
 }
@@ -689,7 +701,7 @@ function updateAndDrawRopes() {
   }
 
   for (const spec of specs) {
-    const rope = updateRope(spec.key, spec.pins, spec.totalLength, spec.iterations);
+    const rope = updateRope(spec.key, spec.pins, spec.totalLength);
     drawTextRope(rope, spec.flowing);
   }
 }
@@ -701,6 +713,10 @@ function detectFaces(detector, now) {
 
 function render(detector) {
   const now = performance.now();
+  // 量測每幀實際間隔給時間修正積分用；夾在 5~50ms，避免分頁切回時的大跳幀讓繩子爆衝。
+  state.prevDt = state.dt;
+  state.dt = state.lastFrameTime ? clamp((now - state.lastFrameTime) / 1000, 0.005, 0.05) : 1 / 60;
+  state.lastFrameTime = now;
   if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
     if (!state.hasVideoFrame) {
       state.hasVideoFrame = true;
