@@ -16,7 +16,8 @@
    `<script type="module">`（此類效果無法以 file:// 開啟，屬正常）。
 4. **登錄** `effects/effects.js` 加一筆，欄位契約見該檔註解。
    principle 條列總計 200 字內；requirements 如實寫（含攝影機/麥克風、
-   建議瀏覽器、效能備註）；offline 如實標註。
+   建議瀏覽器、效能備註）；offline 如實標註。如有靈感/想法請填 `why`，
+   參考連結填 `references`（`{label,url}` 陣列），皆可省略。
 5. **縮圖**：擷取效果代表畫面存為 `effects/<slug>/thumb.png`（建議 800×500）。
    無法截圖時先略過（首頁有佔位樣式），並在回報中註明。
 6. **驗證後才能回報完成**：

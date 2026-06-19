@@ -176,6 +176,7 @@ select {
 
 .shell-description,
 .shell-instructions,
+.shell-why,
 .shell-error-panel p {
   margin: 12px 0;
   color: var(--shell-muted);
@@ -280,6 +281,26 @@ select {
 
 .shell-list li + li {
   margin-top: 6px;
+}
+
+.shell-ref-list {
+  margin: 0;
+  padding-left: 1.15rem;
+  color: var(--shell-muted);
+  line-height: 1.55;
+}
+
+.shell-ref-list li + li {
+  margin-top: 6px;
+}
+
+.shell-ref-list a {
+  color: var(--shell-accent);
+  text-decoration: none;
+}
+
+.shell-ref-list a:hover {
+  text-decoration: underline;
 }
 
 .shell-status-row {

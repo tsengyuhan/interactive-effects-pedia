@@ -91,6 +91,32 @@ Shell API 用法
     return section;
   }
 
+  function createWhySection(effect) {
+    const why = typeof effect.why === "string" ? effect.why.trim() : "";
+    const references = normalizeList(effect.references);
+    if (!why && references.length === 0) {
+      return null;
+    }
+
+    const section = createElement("section", "shell-info-section");
+    const heading = createElement("h3", "shell-small-heading", "為什麼做這個？");
+    const text = why ? createElement("p", "shell-why", why) : null;
+    const list = references.length > 0 ? createElement("ul", "shell-ref-list") : null;
+
+    for (const ref of references) {
+      const item = createElement("li");
+      const link = createElement("a", "", ref.label || ref.url);
+      link.href = ref.url;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      item.append(link);
+      list.append(item);
+    }
+
+    setChildren(section, [heading, text, list]);
+    return section;
+  }
+
   function createBadge(effect) {
     const badge = createElement("span", "shell-offline-badge");
     badge.textContent = effect.offline ? "完全離線" : "需網路";
@@ -169,6 +195,7 @@ Shell API 用法
     setChildren(header, [title, close]);
 
     const description = createElement("p", "shell-description", effect.description || "");
+    const whySection = createWhySection(effect);
     const instructions = createElement("p", "shell-instructions", effect.instructions || "");
 
     const tech = createElement("div", "shell-tech-list");
@@ -190,6 +217,7 @@ Shell API 用法
       paramsSection,
       header,
       description,
+      whySection,
       createElement("h3", "shell-small-heading", "操作說明"),
       instructions,
       tech,
@@ -197,7 +225,7 @@ Shell API 用法
       requirements,
       status,
       source
-    ]);
+    ].filter(Boolean));
 
     document.body.append(container, back, actions, toast, drawer);
 

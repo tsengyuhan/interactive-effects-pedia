@@ -13,7 +13,11 @@
 //   requirements: ["滑鼠或觸控", "任何現代瀏覽器"], // 軟硬體規格
 //   offline: true,              // false 時必填 offlineNote
 //   offlineNote: "",
-//   hasParams: true             // 是否有可調參數面板
+//   hasParams: true,            // 是否有可調參數面板
+//   why: "靈感/想法的一段文字",      // 可省略
+//   references: [                    // 可省略，參考連結
+//     { label: "顯示文字", url: "https://..." }
+//   ]
 // }
 window.EFFECTS = [
   {
