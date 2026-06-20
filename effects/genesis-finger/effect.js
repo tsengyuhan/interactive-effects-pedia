@@ -55,16 +55,8 @@ const state = {
   maxHands: 2
 };
 
-const wallImage = new Image();
-let wallReady = false;
-wallImage.onload = () => { wallReady = true; };
-wallImage.src = "wall.jpg";
-// 牆壁圖可能是 jpg 或 png，jpg 失敗就再試 png，都沒有就用程式畫的土黃色牆。
-wallImage.onerror = () => {
-  if (wallImage.src.endsWith("wall.jpg")) {
-    wallImage.src = "wall.png";
-  }
-};
+// 背景純色（柔和粉膚色），取代原本的土黃牆圖。
+const BG_COLOR = "#f2c4bb";
 
 const handAssets = HAND_SOURCES.map((src) => {
   const asset = { img: new Image(), ready: false, tip: { x: 0.06, y: 0.5 } };
@@ -86,7 +78,7 @@ video.muted = true;
 video.playsInline = true;
 video.style.display = "none";
 shell.container.style.overflow = "hidden";
-shell.container.style.background = "#3a2f1d";
+shell.container.style.background = BG_COLOR;
 shell.container.append(video, canvas);
 
 shell.addParam({
@@ -210,24 +202,9 @@ function drawMirroredVideoTo(targetContext) {
   targetContext.restore();
 }
 
-// ---- 背景：土黃色歷史牆 ----
-function drawWall() {
-  if (wallReady) {
-    // cover 等比鋪滿，避免變形。
-    const scale = Math.max(state.width / wallImage.width, state.height / wallImage.height);
-    const w = wallImage.width * scale;
-    const h = wallImage.height * scale;
-    context.drawImage(wallImage, (state.width - w) / 2, (state.height - h) / 2, w, h);
-    return;
-  }
-  // 備援：程式畫的暖土黃漸層牆，沒有素材也不會空畫面。
-  const gradient = context.createRadialGradient(
-    state.width * 0.5, state.height * 0.42, state.height * 0.1,
-    state.width * 0.5, state.height * 0.5, state.width * 0.75
-  );
-  gradient.addColorStop(0, "#c9a86a");
-  gradient.addColorStop(1, "#7d6238");
-  context.fillStyle = gradient;
+// ---- 背景：純色 ----
+function drawBackground() {
+  context.fillStyle = BG_COLOR;
   context.fillRect(0, 0, state.width, state.height);
 }
 
@@ -486,37 +463,56 @@ function updateTracked() {
   }
 }
 
-function drawFallbackHand(scale) {
-  // 沒有 PNG 素材時的備援手：簡單的前臂＋指向左方的食指，仍能展示互動。
-  // 呼叫端已 translate 到指尖、且套好 scale 以外的旋轉，這裡以指尖為原點往右畫手臂。
+function drawFallbackHand() {
+  // 沒有 PNG 素材時的備援手：以指尖為原點、食指指向 -x、前臂往 +x，與素材方位一致（呼叫端已套好旋轉/縮放）。
   context.fillStyle = "#caa46f";
-  const armW = 520 * scale;
-  const armH = 150 * scale;
   context.beginPath();
-  context.roundRect(70 * scale, -armH / 2, armW, armH, 60 * scale);
+  context.roundRect(70, -75, 520, 150, 60);
   context.fill();
   context.beginPath();
   context.moveTo(0, 0);
-  context.lineTo(95 * scale, -26 * scale);
-  context.lineTo(95 * scale, 26 * scale);
+  context.lineTo(95, -26);
+  context.lineTo(95, 26);
   context.closePath();
   context.fill();
 }
 
+function normalizeAngle(a) {
+  return Math.atan2(Math.sin(a), Math.cos(a));
+}
+
 function drawImageHands() {
-  const centerX = state.width / 2;
+  const cx = state.width / 2;
+  const cy = state.height / 2;
   for (const track of state.tracked) {
     const tip = track.tip;
-    const ratio = Math.abs(tip.x - centerX) / (state.width * 0.5);
-    // 手整個離開畫面（retracting）時，目標接近度歸零，讓對面的手在緩衝幀內滑出畫面再移除，而非瞬間消失。
-    const target = track.retracting ? 0 : clamp(1 - ratio, 0, 1);
+    // 以畫面中央為對稱點：圖片手永遠在使用者手的「對角對側」，朝中央伸來，避免同向重疊。
+    const dx = tip.x - cx;
+    const dy = tip.y - cy;
+    const dist = Math.hypot(dx, dy);
+    const rhx = dist > 1 ? dx / dist : 1; // 由中央指向使用者指尖的單位向量＝圖片手食指的指向
+    const rhy = dist > 1 ? dy / dist : 0;
+
+    // 接近度：使用者指尖越靠近中央，圖片手伸得越進來，滿值時兩指尖相觸。
+    const maxDist = Math.min(state.width, state.height) * 0.5;
+    const target = track.retracting ? 0 : clamp(1 - dist / maxDist, 0, 1);
     track.t = lerp(track.t, target, 0.25);
     const eased = smoothstep(track.t);
 
-    const entryFromRight = tip.x < centerX; // 使用者的手在左半 → 對面的手從右邊伸來
-    const edgeStartX = entryFromRight ? state.width + state.width * 0.6 : -state.width * 0.6;
-    const anchorX = lerp(edgeStartX, tip.x, eased);
-    const anchorY = tip.y; // 水平伸入，與使用者指尖同高，最後指尖相觸
+    // 起點在中央的「對側」且在畫面外；隨接近度滑到使用者指尖位置。
+    const offDist = Math.hypot(state.width, state.height) * 0.8;
+    const startX = cx - rhx * offDist;
+    const startY = cy - rhy * offDist;
+    const anchorX = lerp(startX, tip.x, eased);
+    const anchorY = lerp(startY, tip.y, eased);
+
+    // 素材食指預設指向 -x；旋轉到 rhx,rhy 方向。兩種貼法（不翻/水平翻）取旋轉量較小者，避免手上下顛倒。
+    const targetAngle = Math.atan2(rhy, rhx);
+    const thetaNoFlip = normalizeAngle(targetAngle - Math.PI);
+    const thetaFlip = normalizeAngle(targetAngle);
+    const useFlip = Math.abs(thetaFlip) < Math.abs(thetaNoFlip);
+    const theta = useFlip ? thetaFlip : thetaNoFlip;
+    const sx = useFlip ? -1 : 1;
 
     const asset = handAssets[track.styleIndex];
     const scaledWidth = state.width * 0.55 * state.handScale;
@@ -525,21 +521,16 @@ function drawImageHands() {
     context.shadowColor = "rgba(30, 20, 8, 0.4)";
     context.shadowBlur = 18;
     context.shadowOffsetY = 8;
+    context.translate(anchorX, anchorY);
+    context.rotate(theta);
     if (asset && asset.ready) {
       const scale = scaledWidth / asset.img.width;
-      context.translate(anchorX, anchorY);
-      if (!entryFromRight) {
-        context.scale(-1, 1); // 從左邊伸來時水平翻轉，食指改指向右
-      }
-      context.scale(scale, scale);
+      context.scale(sx * scale, scale);
       context.drawImage(asset.img, -asset.tip.x * asset.img.width, -asset.tip.y * asset.img.height);
     } else {
       const scale = scaledWidth / 680;
-      context.translate(anchorX, anchorY);
-      if (!entryFromRight) {
-        context.scale(-1, 1);
-      }
-      drawFallbackHand(scale);
+      context.scale(sx * scale, scale);
+      drawFallbackHand();
     }
     context.restore();
   }
@@ -647,7 +638,7 @@ function render(landmarker) {
 
     updateTracked();
     context.clearRect(0, 0, state.width, state.height);
-    drawWall();
+    drawBackground();
     drawImageHands();      // 對面的手畫在使用者手後面，指尖相觸時被真手蓋住更自然
     drawUserCutout(mask);
     drawTouchGlows();      // 觸碰微光畫在最上層，相觸瞬間才看得到火光
