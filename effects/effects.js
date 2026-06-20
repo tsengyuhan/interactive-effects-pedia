@@ -107,6 +107,29 @@ window.EFFECTS = [
     hasParams: true
   },
   {
+    id: "genesis-finger",
+    title: "創世紀手指",
+    category: "身體動作",
+    description: "對著鏡頭伸出手，畫面對面伸出一隻手，越往中間靠近，最後兩隻食指指尖相觸，像《創世紀》那幅畫",
+    instructions: "面對鏡頭伸出手；webcam 會去背、疊在土黃色歷史牆上。當你的手越往畫面中央移動，對面就有一隻手越靠近你，最後兩隻食指指尖相碰。對面的手每次隨機是五種風格之一（文藝復興壁畫、卡通、貓掌、機器人、外星人）。畫面中越多手就出現越多對面的手。可調去背模式（只露出手／整個人）、手的大小、最多互動手的數量",
+    tech: ["MediaPipe Hands", "MediaPipe Image Segmenter", "getUserMedia", "Canvas 2D"],
+    principle: [
+      "MediaPipe 手部模型即時取得每隻手的食指指尖座標，跨幀以最近鄰配對維持身分與隨機風格",
+      "人像分割模型把人從背景切出；只露出手模式再用手部關鍵點描出手形並裁到手腕，疊在土黃牆背景上",
+      "以指尖到畫面中央的距離換算接近度，對面的手從反方向邊緣依接近度滑入，接近度滿時兩指尖在中央相觸"
+    ],
+    requirements: ["攝影機", "建議 Chrome / Edge", "舊機器 fps 較低", "需經 start.bat 或 HTTPS 開啟"],
+    offline: true,
+    offlineNote: "",
+    hasParams: true,
+    why: "看到一張《創世紀》的圖，聯想到現在科技把各種人與資訊連在一起——觸碰的點很小，後續的發展卻無法預期。",
+    references: [
+      { label: "創世紀手指 參考圖 1", url: "https://fr.pinterest.com/pin/790592909628866724/" },
+      { label: "創世紀手指 參考圖 2", url: "https://fr.pinterest.com/pin/790592909628866731/" },
+      { label: "創世紀手指 參考圖 3", url: "https://fr.pinterest.com/pin/962574120343565841/" }
+    ]
+  },
+  {
     id: "text-rope-link",
     title: "文字繩連連看",
     category: "身體動作",
