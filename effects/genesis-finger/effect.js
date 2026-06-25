@@ -275,13 +275,25 @@ function drawHandShape(ctx, hand) {
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
-  // 手掌：含拇指根的凸包外擴，補滿腕部到指節、魚際肉。
-  const palm = convexHull([0, 1, 2, 5, 9, 13, 17].map((i) => hand.points[i]));
+  // 手掌：含拇指根的凸包，只當「範圍框（ROI）」把臉排除在外。框是上界，超出真手的部分會被後面
+  // 交集人像遮罩削掉，所以可大膽外推、不怕突角。小指側（尺側）手掌肉（小魚際）沒有對應 landmark，
+  // 凸包會從小指根 17 直拉到手腕 0 把整條外緣切掉——沿尺側方向補兩個虛擬點把框撐到真手外。
+  const radial = hand.points[5];
+  const ulnar = hand.points[17];
+  const wrist = hand.points[0];
+  // 食指根→小指根＝尺側橫向，長度約 palmWidth。
+  const ulnarDir = { x: ulnar.x - radial.x, y: ulnar.y - radial.y };
+  const palm = convexHull([
+    hand.points[0], hand.points[1], hand.points[2],
+    hand.points[5], hand.points[9], hand.points[13], hand.points[17],
+    { x: ulnar.x + ulnarDir.x * 0.55, y: ulnar.y + ulnarDir.y * 0.55 }, // 小指根外側
+    { x: wrist.x + ulnarDir.x * 0.45, y: wrist.y + ulnarDir.y * 0.45 }  // 手腕外側（小魚際近腕端）
+  ]);
   const center = {
     x: palm.reduce((s, p) => s + p.x, 0) / palm.length,
     y: palm.reduce((s, p) => s + p.y, 0) / palm.length
   };
-  const pad = palmWidth * 0.2;
+  const pad = palmWidth * 0.28;
   ctx.beginPath();
   palm.forEach((p, i) => {
     const dx = p.x - center.x;
@@ -315,23 +327,25 @@ function drawHandShape(ctx, hand) {
   }
 }
 
-function buildHandMask() {
+function buildHandMask(mask) {
   maskContext.setTransform(1, 0, 0, 1, 0, 0);
   maskContext.clearRect(0, 0, state.width, state.height);
   for (const hand of state.hands.slice(0, state.maxHands)) {
     drawHandShape(maskContext, hand);
+  }
+  // landmark 手形只當「範圍框」把臉排除；框內交集真實人像遮罩，修出自然手緣。
+  // 沒有人像遮罩時退回純手形（segmenter 尚未就緒或讀取失敗的保險）。
+  if (mask) {
+    renderPersonMaskCanvas(mask);
+    blitPersonMask("destination-in");
   }
 }
 
 // 整個人模式：直接把低解析的人像信心遮罩鏡像放大到全畫面，比逐像素手形快。
 const personMaskCanvas = document.createElement("canvas");
 const personMaskContext = personMaskCanvas.getContext("2d");
-function buildPersonMask(mask) {
-  maskContext.setTransform(1, 0, 0, 1, 0, 0);
-  maskContext.clearRect(0, 0, state.width, state.height);
-  if (!mask) {
-    return;
-  }
+// 把低解析的人像信心遮罩轉成 alpha 畫進 personMaskCanvas（尚未鏡像、尚未放大）。
+function renderPersonMaskCanvas(mask) {
   personMaskCanvas.width = mask.width;
   personMaskCanvas.height = mask.height;
   const image = personMaskContext.createImageData(mask.width, mask.height);
@@ -346,8 +360,13 @@ function buildPersonMask(mask) {
     }
   }
   personMaskContext.putImageData(image, 0, 0);
-  // 遮罩對應未鏡像影像，畫到鏡像畫面上要水平翻轉。
+}
+
+// 把 personMaskCanvas 鏡像放大畫到 maskContext。compositeOp 決定是直接覆蓋（整個人）或交集（手形框內）。
+function blitPersonMask(compositeOp) {
   maskContext.save();
+  maskContext.globalCompositeOperation = compositeOp;
+  // 遮罩對應未鏡像影像，畫到鏡像畫面上要水平翻轉。
   maskContext.translate(state.width, 0);
   maskContext.scale(-1, 1);
   maskContext.imageSmoothingEnabled = true;
@@ -355,11 +374,21 @@ function buildPersonMask(mask) {
   maskContext.restore();
 }
 
+function buildPersonMask(mask) {
+  maskContext.setTransform(1, 0, 0, 1, 0, 0);
+  maskContext.clearRect(0, 0, state.width, state.height);
+  if (!mask) {
+    return;
+  }
+  renderPersonMaskCanvas(mask);
+  blitPersonMask("source-over");
+}
+
 function drawUserCutout(mask) {
   if (state.cutoutMode === "person") {
     buildPersonMask(mask);
   } else {
-    buildHandMask();
+    buildHandMask(mask);
   }
   drawMirroredVideoTo(mirrorContext);
   cutoutContext.setTransform(1, 0, 0, 1, 0, 0);
@@ -603,8 +632,8 @@ function render(landmarker) {
       shell.hideLoading();
     }
     let mask = state.personMask;
-    // 只有「整個人」模式需要人像分割；手部模式純用 landmark 手形，不必跑 segmenter。
-    const needSegmenter = state.cutoutMode === "person";
+    // 兩種模式都需要人像分割：整個人模式直接用，手部模式拿來在 landmark 框內交集出真實手緣。
+    const needSegmenter = true;
     // segmenter 尚未就緒時以冷卻時間重試，失敗只記一次 log，避免每幀洗版又能恢復。
     if (needSegmenter && !state.segmenter && now >= segmenterRetryAt) {
       segmenterRetryAt = now + 2000;
