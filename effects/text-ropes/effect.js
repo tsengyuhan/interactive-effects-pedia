@@ -407,8 +407,22 @@ function getWristCut(hand) {
   const length = Math.hypot(dx, dy) || 1;
   const handDirectionX = dx / length;
   const handDirectionY = dy / length;
-  const cutX = wrist.x - handDirectionX * handModeStyle.wristPadding;
-  const cutY = wrist.y - handDirectionY * handModeStyle.wristPadding;
+
+  // 切線原本只以手腕(point 0)為錨。手背朝鏡頭或往側邊轉時，拇指根/魚際(point 1、2)
+  // 會投影到手腕「後方」，落在前臂側被切掉 → 手背缺一塊。改成取橈側基部 landmark
+  // 裡最靠前臂的那個當錨，確保拇指根永遠留在手這側；只有姿勢需要時才往後退。
+  let minProjection = 0; // 手腕自身投影為 0，作為下界（至少退到手腕後方）
+  for (const index of [1, 2]) {
+    const projection =
+      (hand.points[index].x - wrist.x) * handDirectionX +
+      (hand.points[index].y - wrist.y) * handDirectionY;
+    if (projection < minProjection) {
+      minProjection = projection;
+    }
+  }
+  const cutDistance = minProjection - handModeStyle.wristPadding;
+  const cutX = wrist.x + handDirectionX * cutDistance;
+  const cutY = wrist.y + handDirectionY * cutDistance;
 
   return { x: cutX, y: cutY, normalX: handDirectionX, normalY: handDirectionY };
 }
