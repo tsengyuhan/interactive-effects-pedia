@@ -8,21 +8,17 @@ const mirrorCanvas = document.createElement("canvas");
 const mirrorContext = mirrorCanvas.getContext("2d");
 const maskCanvas = document.createElement("canvas");
 const maskContext = maskCanvas.getContext("2d");
-const shapeCanvas = document.createElement("canvas");
-// shapeContext 每幀被 getImageData 回讀，明示 willReadFrequently 走較快路徑。
-const shapeContext = shapeCanvas.getContext("2d", { willReadFrequently: true });
 const cutoutCanvas = document.createElement("canvas");
 const cutoutContext = cutoutCanvas.getContext("2d");
 const video = document.createElement("video");
 
 const errorMessage = "請允許攝影機權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
-const fingerTips = [4, 8, 12, 16, 20];
 const palmIndices = [0, 5, 9, 13, 17];
 // 去背參數沿用「文字繩」純手部模式的經驗值：手形多邊形先撐大，再用人像遮罩修回真輪廓。
 const cutoutStyle = {
-  personThreshold: 0.18,
-  wristPadding: 30,
-  palmPadding: 70
+  // 羽化帶只留在逼近背景的那端：信心 >personHigh 一律全不透明，避免掌心凹陷讀到中段信心而被淡成破洞。
+  personLow: 0.05,
+  personHigh: 0.22
 };
 
 // 五種圖片手的素材；找不到檔案時 onerror 會讓該張維持 ready=false，改用程式畫的備援手。
@@ -132,6 +128,11 @@ function smoothstep(t) {
   return x * x * (3 - 2 * x);
 }
 
+function normalizeVector(vector, fallback = { x: 1, y: 0 }) {
+  const length = Math.hypot(vector.x, vector.y);
+  return length > 0.0001 ? { x: vector.x / length, y: vector.y / length } : fallback;
+}
+
 function mirrorPoint(point) {
   // webcam 畫面左右鏡像，互動座標一律用鏡像後的 CSS 像素。
   return { x: (1 - point.x) * state.width, y: point.y * state.height };
@@ -143,7 +144,28 @@ function analyzeHand(landmarks, index) {
     (sum, i) => ({ x: sum.x + points[i].x / palmIndices.length, y: sum.y + points[i].y / palmIndices.length }),
     { x: 0, y: 0 }
   );
-  return { id: `raw-${index}`, points, indexTip: points[8], centroid };
+  // 以手腕至食指骨節鏈估算主軸；越靠近指尖權重越高，可降低單一 landmark 抖動的影響。
+  const axisIndices = [0, 5, 6, 7, 8];
+  const axisWeights = [0.7, 1, 1.2, 1.4];
+  const axisVector = { x: 0, y: 0 };
+  let axisLength = 0;
+  for (let i = 0; i < axisWeights.length; i += 1) {
+    const from = points[axisIndices[i]];
+    const to = points[axisIndices[i + 1]];
+    axisVector.x += (to.x - from.x) * axisWeights[i];
+    axisVector.y += (to.y - from.y) * axisWeights[i];
+    axisLength += distance(from, to);
+  }
+  const palmWidth = distance(points[5], points[17]);
+  const axisConfidence = palmWidth > 1 ? axisLength / palmWidth : 0;
+  return {
+    id: `raw-${index}`,
+    points,
+    indexTip: points[8],
+    centroid,
+    axis: normalizeVector(axisVector),
+    axisConfidence
+  };
 }
 
 // 掃描圖片最左側的不透明像素當作食指指尖錨點：
@@ -186,7 +208,7 @@ function detectTip(img) {
 function resize() {
   state.width = Math.max(1, shell.container.clientWidth || window.innerWidth);
   state.height = Math.max(1, shell.container.clientHeight || window.innerHeight);
-  for (const c of [canvas, mirrorCanvas, maskCanvas, shapeCanvas, cutoutCanvas]) {
+  for (const c of [canvas, mirrorCanvas, maskCanvas, cutoutCanvas]) {
     c.width = Math.floor(state.width);
     c.height = Math.floor(state.height);
   }
@@ -217,146 +239,88 @@ function readPersonMask(result) {
   return { width: mask.width, height: mask.height, data: mask.getAsFloat32Array() };
 }
 
-function mirroredPersonMaskAt(mask, x, y) {
-  if (!mask) {
-    return 0;
+// 21 個關鍵點的凸包（Andrew monotone chain）。逆時針，去重端點。
+function convexHull(points) {
+  const pts = points.slice().sort((a, b) => a.x - b.x || a.y - b.y);
+  if (pts.length < 3) {
+    return pts;
   }
-  const nx = clamp(x / state.width, 0, 1);
-  const ny = clamp(y / state.height, 0, 1);
-  const mx = clamp(Math.floor((1 - nx) * mask.width), 0, mask.width - 1);
-  const my = clamp(Math.floor(ny * mask.height), 0, mask.height - 1);
-  return mask.data[my * mask.width + mx] || 0;
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const half = (source) => {
+    const out = [];
+    for (const p of source) {
+      while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) {
+        out.pop();
+      }
+      out.push(p);
+    }
+    out.pop();
+    return out;
+  };
+  return half(pts).concat(half(pts.slice().reverse()));
 }
 
-// ---- 只露出手：手形多邊形 ∩ 人像遮罩 ∩ 手腕切線 ----
-function drawHandShape(hand) {
+const FINGERS = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
+
+// ---- 只露出手：純 landmark 手形當去背遮罩，裡面填真實攝影機畫面 ----
+// 不交集人像遮罩——segmentation 分不出手與臉，手擋臉時邊界帶會漏臉。手形由掌心凸包＋手指膠囊組成，
+// 寬度約一根手指，臉永遠在手形之外，手指間隙也不會漏背景。寬度過細會切到手、過粗會在手緣漏出背後畫面，為調校旋鈕。
+function drawHandShape(ctx, hand) {
   if (!hand || hand.points.length < 21) {
     return;
   }
   const palmWidth = distance(hand.points[5], hand.points[17]);
-  const lineWidth = clamp(palmWidth * 0.34, 14, 72);
-  const fingerLineWidth = lineWidth * 1.22;
-  shapeContext.fillStyle = "#ffffff";
-  shapeContext.strokeStyle = "#ffffff";
-  shapeContext.lineWidth = lineWidth;
-  shapeContext.lineCap = "round";
-  shapeContext.lineJoin = "round";
+  ctx.fillStyle = "#ffffff";
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
 
-  // 手掌多邊形以重心往外撐 palmPadding，把魚際肉與掌根包成超集，多餘部分後面被人像遮罩修掉。
-  const rawPalm = palmIndices.map((index) => hand.points[index]);
+  // 手掌：含拇指根的凸包外擴，補滿腕部到指節、魚際肉。
+  const palm = convexHull([0, 1, 2, 5, 9, 13, 17].map((i) => hand.points[i]));
   const center = {
-    x: rawPalm.reduce((s, p) => s + p.x, 0) / rawPalm.length,
-    y: rawPalm.reduce((s, p) => s + p.y, 0) / rawPalm.length
+    x: palm.reduce((s, p) => s + p.x, 0) / palm.length,
+    y: palm.reduce((s, p) => s + p.y, 0) / palm.length
   };
-  shapeContext.beginPath();
-  rawPalm.forEach((p, i) => {
+  const pad = palmWidth * 0.2;
+  ctx.beginPath();
+  palm.forEach((p, i) => {
     const dx = p.x - center.x;
     const dy = p.y - center.y;
     const len = Math.hypot(dx, dy) || 1;
-    const px = p.x + (dx / len) * cutoutStyle.palmPadding;
-    const py = p.y + (dy / len) * cutoutStyle.palmPadding;
+    const px = p.x + (dx / len) * pad;
+    const py = p.y + (dy / len) * pad;
     if (i === 0) {
-      shapeContext.moveTo(px, py);
+      ctx.moveTo(px, py);
     } else {
-      shapeContext.lineTo(px, py);
+      ctx.lineTo(px, py);
     }
   });
-  shapeContext.closePath();
-  shapeContext.fill();
-  shapeContext.stroke();
+  ctx.closePath();
+  ctx.fill();
 
-  const fingers = [[1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12], [13, 14, 15, 16], [17, 18, 19, 20]];
-  for (const finger of fingers) {
-    shapeContext.lineWidth = fingerLineWidth;
-    shapeContext.beginPath();
+  // 手指：沿關節畫圓頭粗線；拇指略粗。一根手指約 palmWidth/3。
+  for (let f = 0; f < FINGERS.length; f += 1) {
+    const finger = FINGERS[f];
+    ctx.lineWidth = palmWidth * (f === 0 ? 0.34 : 0.3);
+    ctx.beginPath();
     finger.forEach((index, i) => {
       const p = hand.points[index];
       if (i === 0) {
-        shapeContext.moveTo(p.x, p.y);
+        ctx.moveTo(p.x, p.y);
       } else {
-        shapeContext.lineTo(p.x, p.y);
+        ctx.lineTo(p.x, p.y);
       }
     });
-    shapeContext.stroke();
-  }
-  const fingertipRadius = fingerLineWidth * 0.52;
-  for (const tipIndex of fingerTips) {
-    const tip = hand.points[tipIndex];
-    shapeContext.beginPath();
-    shapeContext.arc(tip.x, tip.y, fingertipRadius, 0, Math.PI * 2);
-    shapeContext.fill();
+    ctx.stroke();
   }
 }
 
-function getWristCut(hand) {
-  const wrist = hand.points[0];
-  const palmCenter = [5, 9, 13, 17].reduce(
-    (c, i) => ({ x: c.x + hand.points[i].x / 4, y: c.y + hand.points[i].y / 4 }),
-    { x: 0, y: 0 }
-  );
-  const dx = palmCenter.x - wrist.x;
-  const dy = palmCenter.y - wrist.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const nx = dx / len;
-  const ny = dy / len;
-  return { x: wrist.x - nx * cutoutStyle.wristPadding, y: wrist.y - ny * cutoutStyle.wristPadding, nx, ny };
-}
-
-function isInsideWristCut(cut, x, y) {
-  return (x - cut.x) * cut.nx + (y - cut.y) * cut.ny >= 0;
-}
-
-function buildHandMask(mask) {
+function buildHandMask() {
   maskContext.setTransform(1, 0, 0, 1, 0, 0);
   maskContext.clearRect(0, 0, state.width, state.height);
-  if (state.hands.length === 0) {
-    return;
+  for (const hand of state.hands.slice(0, state.maxHands)) {
+    drawHandShape(maskContext, hand);
   }
-  shapeContext.setTransform(1, 0, 0, 1, 0, 0);
-  shapeContext.clearRect(0, 0, state.width, state.height);
-  for (const hand of state.hands) {
-    drawHandShape(hand);
-  }
-  // 只在所有手的外擴包圍盒內回讀與逐像素運算（手只佔畫面一小塊），畫面越大省越多。
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const hand of state.hands) {
-    for (const p of hand.points) {
-      if (p.x < minX) minX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y > maxY) maxY = p.y;
-    }
-  }
-  const pad = cutoutStyle.palmPadding + 24;
-  const bx = clamp(Math.floor(minX - pad), 0, maskCanvas.width);
-  const by = clamp(Math.floor(minY - pad), 0, maskCanvas.height);
-  const bw = clamp(Math.ceil(maxX + pad) - bx, 0, maskCanvas.width - bx);
-  const bh = clamp(Math.ceil(maxY + pad) - by, 0, maskCanvas.height - by);
-  if (bw < 1 || bh < 1) {
-    return;
-  }
-  const shapePixels = shapeContext.getImageData(bx, by, bw, bh).data;
-  const image = maskContext.createImageData(bw, bh);
-  const pixels = image.data;
-  const wristCuts = state.hands.map(getWristCut);
-  for (let yy = 0; yy < bh; yy += 1) {
-    for (let xx = 0; xx < bw; xx += 1) {
-      const index = (yy * bw + xx) * 4;
-      const x = bx + xx;
-      const y = by + yy;
-      if (shapePixels[index + 3] === 0 || mirroredPersonMaskAt(mask, x, y) < cutoutStyle.personThreshold) {
-        continue;
-      }
-      if (!wristCuts.some((cut) => isInsideWristCut(cut, x, y))) {
-        continue;
-      }
-      pixels[index] = 255;
-      pixels[index + 1] = 255;
-      pixels[index + 2] = 255;
-      pixels[index + 3] = 255;
-    }
-  }
-  maskContext.putImageData(image, bx, by);
 }
 
 // 整個人模式：直接把低解析的人像信心遮罩鏡像放大到全畫面，比逐像素手形快。
@@ -372,11 +336,13 @@ function buildPersonMask(mask) {
   personMaskCanvas.height = mask.height;
   const image = personMaskContext.createImageData(mask.width, mask.height);
   for (let i = 0; i < mask.data.length; i += 1) {
-    if (mask.data[i] >= cutoutStyle.personThreshold) {
+    const alpha = Math.round(255 * smoothstep((mask.data[i] - cutoutStyle.personLow) /
+      (cutoutStyle.personHigh - cutoutStyle.personLow)));
+    if (alpha > 0) {
       image.data[i * 4] = 255;
       image.data[i * 4 + 1] = 255;
       image.data[i * 4 + 2] = 255;
-      image.data[i * 4 + 3] = 255;
+      image.data[i * 4 + 3] = alpha;
     }
   }
   personMaskContext.putImageData(image, 0, 0);
@@ -393,7 +359,7 @@ function drawUserCutout(mask) {
   if (state.cutoutMode === "person") {
     buildPersonMask(mask);
   } else {
-    buildHandMask(mask);
+    buildHandMask();
   }
   drawMirroredVideoTo(mirrorContext);
   cutoutContext.setTransform(1, 0, 0, 1, 0, 0);
@@ -436,6 +402,24 @@ function updateTracked() {
       const hand = detected[best];
       track.centroid = hand.centroid;
       track.tip = { x: lerp(track.tip.x, hand.indexTip.x, 0.5), y: lerp(track.tip.y, hand.indexTip.y, 0.5) };
+      // 低可信軸向沿用上一幀；近乎反向的跳變視為 landmark 誤配，不讓路徑瞬間翻面。
+      const dot = track.axis.x * hand.axis.x + track.axis.y * hand.axis.y;
+      if (hand.axisConfidence >= 1.15 && dot > -0.35) {
+        track.axis = normalizeVector({
+          x: lerp(track.axis.x, hand.axis.x, 0.22),
+          y: lerp(track.axis.y, hand.axis.y, 0.22)
+        }, track.axis);
+        track.reverseFrames = 0;
+      } else if (hand.axisConfidence >= 1.15) {
+        // 連續多幀都反向代表使用者真的轉手；短暫跳點則不會累積到門檻。
+        track.reverseFrames += 1;
+        if (track.reverseFrames >= 4) {
+          track.axis = hand.axis;
+          track.reverseFrames = 0;
+        }
+      } else {
+        track.reverseFrames = 0;
+      }
       track.missing = 0;
       track.retracting = false;
     } else {
@@ -456,6 +440,8 @@ function updateTracked() {
       styleIndex: Math.floor(Math.random() * handAssets.length),
       centroid: hand.centroid,
       tip: { x: hand.indexTip.x, y: hand.indexTip.y },
+      axis: hand.axisConfidence >= 1.15 ? hand.axis : { x: 0, y: -1 },
+      reverseFrames: 0,
       t: 0,
       missing: 0,
       retracting: false
@@ -477,45 +463,44 @@ function drawFallbackHand() {
   context.fill();
 }
 
-function normalizeAngle(a) {
-  return Math.atan2(Math.sin(a), Math.cos(a));
+function rayToExpandedViewport(origin, direction, margin) {
+  const bounds = { left: -margin, right: state.width + margin, top: -margin, bottom: state.height + margin };
+  const candidates = [];
+  if (direction.x > 0.0001) candidates.push((bounds.right - origin.x) / direction.x);
+  if (direction.x < -0.0001) candidates.push((bounds.left - origin.x) / direction.x);
+  if (direction.y > 0.0001) candidates.push((bounds.bottom - origin.y) / direction.y);
+  if (direction.y < -0.0001) candidates.push((bounds.top - origin.y) / direction.y);
+  const t = Math.min(...candidates.filter((value) => value > 0));
+  return { x: origin.x + direction.x * t, y: origin.y + direction.y * t };
 }
 
 function drawImageHands() {
-  const cx = state.width / 2;
-  const cy = state.height / 2;
   for (const track of state.tracked) {
     const tip = track.tip;
-    // 以畫面中央為對稱點：圖片手永遠在使用者手的「對角對側」，朝中央伸來，避免同向重疊。
-    const dx = tip.x - cx;
-    const dy = tip.y - cy;
-    const dist = Math.hypot(dx, dy);
-    const rhx = dist > 1 ? dx / dist : 1; // 由中央指向使用者指尖的單位向量＝圖片手食指的指向
-    const rhy = dist > 1 ? dy / dist : 0;
 
-    // 接近度：使用者指尖越靠近中央，圖片手伸得越進來，滿值時兩指尖相觸。
-    const maxDist = Math.min(state.width, state.height) * 0.5;
-    const target = track.retracting ? 0 : clamp(1 - dist / maxDist, 0, 1);
+    // 方向取自使用者手腕朝食指尖的平滑主軸；圖片手永遠由主軸前方的畫外伸來。
+    const scaledWidth = state.width * 0.55 * state.handScale;
+    const margin = scaledWidth * 0.08;
+    const start = rayToExpandedViewport(tip, track.axis, margin);
+    const entry = rayToExpandedViewport(tip, { x: -track.axis.x, y: -track.axis.y }, margin);
+
+    // 伸出量＝指尖沿主軸的伸入深度：身後邊界 entry 到前方邊界 start 之間，指尖所在的相對位置。
+    // 往圖片手方向伸手→reach 變大、滿值相觸；反向收回→退開。0.6 為觸發靈敏度旋鈕。
+    const toStart = Math.hypot(start.x - tip.x, start.y - tip.y);
+    const toEntry = Math.hypot(entry.x - tip.x, entry.y - tip.y);
+    const reach = toEntry / (toEntry + toStart || 1);
+    const target = track.retracting ? 0 : clamp(reach / 0.6, 0, 1);
     track.t = lerp(track.t, target, 0.25);
     const eased = smoothstep(track.t);
 
-    // 起點在中央的「對側」且在畫面外；隨接近度滑到使用者指尖位置。
-    const offDist = Math.hypot(state.width, state.height) * 0.8;
-    const startX = cx - rhx * offDist;
-    const startY = cy - rhy * offDist;
-    const anchorX = lerp(startX, tip.x, eased);
-    const anchorY = lerp(startY, tip.y, eased);
+    const anchorX = lerp(start.x, tip.x, eased);
+    const anchorY = lerp(start.y, tip.y, eased);
 
-    // 素材食指預設指向 -x；旋轉到 rhx,rhy 方向。兩種貼法（不翻/水平翻）取旋轉量較小者，避免手上下顛倒。
-    const targetAngle = Math.atan2(rhy, rhx);
-    const thetaNoFlip = normalizeAngle(targetAngle - Math.PI);
-    const thetaFlip = normalizeAngle(targetAngle);
-    const useFlip = Math.abs(thetaFlip) < Math.abs(thetaNoFlip);
-    const theta = useFlip ? thetaFlip : thetaNoFlip;
-    const sx = useFlip ? -1 : 1;
+    // 圖片手由畫外朝使用者前進，指向與使用者主軸相反；素材預設朝左，只旋轉、不翻面。
+    const imageDirection = { x: -track.axis.x, y: -track.axis.y };
+    const theta = Math.atan2(imageDirection.y, imageDirection.x) - Math.PI;
 
     const asset = handAssets[track.styleIndex];
-    const scaledWidth = state.width * 0.55 * state.handScale;
 
     context.save();
     context.shadowColor = "rgba(30, 20, 8, 0.4)";
@@ -525,11 +510,11 @@ function drawImageHands() {
     context.rotate(theta);
     if (asset && asset.ready) {
       const scale = scaledWidth / asset.img.width;
-      context.scale(sx * scale, scale);
+      context.scale(scale, scale);
       context.drawImage(asset.img, -asset.tip.x * asset.img.width, -asset.tip.y * asset.img.height);
     } else {
       const scale = scaledWidth / 680;
-      context.scale(sx * scale, scale);
+      context.scale(scale, scale);
       drawFallbackHand();
     }
     context.restore();
@@ -618,8 +603,10 @@ function render(landmarker) {
       shell.hideLoading();
     }
     let mask = state.personMask;
+    // 只有「整個人」模式需要人像分割；手部模式純用 landmark 手形，不必跑 segmenter。
+    const needSegmenter = state.cutoutMode === "person";
     // segmenter 尚未就緒時以冷卻時間重試，失敗只記一次 log，避免每幀洗版又能恢復。
-    if (!state.segmenter && now >= segmenterRetryAt) {
+    if (needSegmenter && !state.segmenter && now >= segmenterRetryAt) {
       segmenterRetryAt = now + 2000;
       ensureSegmenter().catch((error) => {
         if (!segmenterLogged) {
@@ -631,7 +618,7 @@ function render(landmarker) {
     if (video.currentTime !== state.lastVideoTime) {
       state.lastVideoTime = video.currentTime;
       updateHands(landmarker, now);
-      if (state.segmenter) {
+      if (needSegmenter && state.segmenter) {
         mask = updateMask(state.segmenter, now);
       }
     }
