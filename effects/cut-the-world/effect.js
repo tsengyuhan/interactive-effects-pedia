@@ -16,6 +16,10 @@ const state = {
   height: 1,
   mode: "tech-pixel",
   fallSpeed: 1,
+  grain: 12,
+  armed: false,
+  holdStart: 0,
+  fingertip: null,
   path: [],
   pathFadeStart: 0,
   lastGestureTime: 0,
@@ -28,7 +32,8 @@ const state = {
   animationId: 0,
   previousFrameTime: 0,
   matrixChars: [],
-  matrixColumns: []
+  matrixColumns: [],
+  lastEffectTime: 0
 };
 
 const errorMessage = "請允許攝影機權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
@@ -64,6 +69,19 @@ shell.addParam({
 
 shell.addParam({
   type: "range",
+  key: "grain",
+  label: "特效顆粒",
+  min: 8,
+  max: 32,
+  step: 1,
+  value: state.grain,
+  onChange(value) {
+    state.grain = Number(value);
+  }
+});
+
+shell.addParam({
+  type: "range",
   key: "fallSpeed",
   label: "掉落速度",
   min: 0.5,
@@ -83,6 +101,8 @@ shell.addButton({
     state.fragments = [];
     state.path = [];
     state.pathFadeStart = 0;
+    state.armed = false;
+    state.holdStart = 0;
   }
 });
 
@@ -188,16 +208,32 @@ function appendPathPoint(point, now) {
 function updateHand(landmarks, now) {
   const drawing = landmarks && isDrawingGesture(landmarks);
   if (drawing) {
+    state.fingertip = mirrorPoint(landmarks[8]);
+    state.lastGestureTime = now;
+    // 手勢須維持 0.5 秒才開始畫線，避免手指一入鏡就誤觸
+    if (!state.armed) {
+      if (!state.holdStart) state.holdStart = now;
+      if (now - state.holdStart < 500) return;
+      state.armed = true;
+    }
     if (state.pathFadeStart) {
       state.path = [];
       state.pathFadeStart = 0;
     }
-    state.lastGestureTime = now;
-    appendPathPoint(mirrorPoint(landmarks[8]), now);
+    appendPathPoint(state.fingertip, now);
     return;
   }
-  if (state.path.length && now - state.lastGestureTime > 500 && !state.pathFadeStart) {
-    state.pathFadeStart = now;
+  state.fingertip = null;
+  // 確認期允許 200ms 偵測抖動，超過就重新計時
+  if (!state.armed && state.holdStart && now - state.lastGestureTime > 200) {
+    state.holdStart = 0;
+  }
+  if (state.armed && now - state.lastGestureTime > 500) {
+    state.armed = false;
+    state.holdStart = 0;
+    if (state.path.length && !state.pathFadeStart) {
+      state.pathFadeStart = now;
+    }
   }
   if (state.pathFadeStart && now - state.pathFadeStart >= 300) {
     state.path = [];
@@ -222,20 +258,30 @@ function drawMirroredVideo(targetContext, width, height) {
 }
 
 function prepareSample(cellSize) {
-  const width = Math.max(1, Math.round(480));
-  const height = Math.max(1, Math.round(width * state.height / state.width));
+  // 特效畫布解析度太低會被拉伸放大，顆粒看起來比 cellSize 大很多；長邊上限 1280 兼顧效能
+  let width = Math.max(1, Math.min(1280, Math.round(state.width)));
+  let height = Math.max(1, Math.round(width * state.height / state.width));
+  if (height > 1280) {
+    height = 1280;
+    width = Math.max(1, Math.round(height * state.width / state.height));
+  }
   const cols = Math.max(1, Math.ceil(width / cellSize));
   const rows = Math.max(1, Math.ceil(height / cellSize));
-  sampleCanvas.width = cols;
-  sampleCanvas.height = rows;
+  // 重設 canvas 尺寸會清空並重配記憶體，只在尺寸真的變動時做
+  if (sampleCanvas.width !== cols || sampleCanvas.height !== rows) {
+    sampleCanvas.width = cols;
+    sampleCanvas.height = rows;
+  }
   drawMirroredVideo(sampleContext, cols, rows);
-  effectCanvas.width = width;
-  effectCanvas.height = height;
+  if (effectCanvas.width !== width || effectCanvas.height !== height) {
+    effectCanvas.width = width;
+    effectCanvas.height = height;
+  }
   return { width, height, cols, rows };
 }
 
 function renderTechPixel() {
-  const grid = 14;
+  const grid = state.grain;
   const size = prepareSample(grid);
   const image = sampleContext.getImageData(0, 0, size.cols, size.rows);
   for (let i = 0; i < image.data.length; i += 4) {
@@ -254,7 +300,7 @@ function renderTechPixel() {
 }
 
 function renderMatrix(now) {
-  const cell = 16;
+  const cell = state.grain;
   const size = prepareSample(cell);
   const pixels = sampleContext.getImageData(0, 0, size.cols, size.rows).data;
   const total = size.cols * size.rows;
@@ -281,7 +327,7 @@ function renderMatrix(now) {
 }
 
 function renderHalftone() {
-  const cell = 10;
+  const cell = state.grain;
   const size = prepareSample(cell);
   const pixels = sampleContext.getImageData(0, 0, size.cols, size.rows).data;
   effectContext.fillStyle = "#f2ead8";
@@ -306,8 +352,10 @@ function renderHalftone() {
 function renderWoodcut() {
   const width = 240;
   const height = Math.max(1, Math.round(width * state.height / state.width));
-  sampleCanvas.width = width;
-  sampleCanvas.height = height;
+  if (sampleCanvas.width !== width || sampleCanvas.height !== height) {
+    sampleCanvas.width = width;
+    sampleCanvas.height = height;
+  }
   drawMirroredVideo(sampleContext, width, height);
   const image = sampleContext.getImageData(0, 0, width, height);
   const palette = [[26, 22, 20], [200, 69, 44], [232, 217, 184], [245, 239, 224]];
@@ -319,8 +367,11 @@ function renderWoodcut() {
     image.data[i + 2] = color[2];
   }
   sampleContext.putImageData(image, 0, 0);
-  effectCanvas.width = 480;
-  effectCanvas.height = Math.max(1, Math.round(480 * state.height / state.width));
+  const outputHeight = Math.max(1, Math.round(480 * state.height / state.width));
+  if (effectCanvas.width !== 480 || effectCanvas.height !== outputHeight) {
+    effectCanvas.width = 480;
+    effectCanvas.height = outputHeight;
+  }
   effectContext.imageSmoothingEnabled = false;
   effectContext.drawImage(sampleCanvas, 0, 0, effectCanvas.width, effectCanvas.height);
 }
@@ -387,7 +438,11 @@ function drawWorld(now) {
   context.clearRect(0, 0, state.width, state.height);
   context.drawImage(baseCanvas, 0, 0);
   const needsEffect = state.holes.length || state.glows.length || state.fragments.length;
-  if (needsEffect) renderEffect(now);
+  // ponytail: 特效節流到約 30fps，halftone/matrix 顆粒調到最細時全速跑不動
+  if (needsEffect && now - state.lastEffectTime >= 33) {
+    renderEffect(now);
+    state.lastEffectTime = now;
+  }
   for (const hole of state.holes) {
     context.save();
     pathOn(context, hole);
@@ -429,20 +484,39 @@ function drawWorld(now) {
     context.beginPath();
     context.moveTo(state.path[0].x, state.path[0].y);
     for (let i = 1; i < state.path.length; i += 1) context.lineTo(state.path[i].x, state.path[i].y);
-    context.strokeStyle = "white";
-    context.lineWidth = 4;
     context.lineCap = "round";
     context.lineJoin = "round";
     context.shadowColor = "white";
-    context.shadowBlur = 16;
+    // 外圈粗光暈＋內圈亮芯，兩道描邊讓線條又粗又亮
+    context.strokeStyle = "rgba(255,255,255,0.4)";
+    context.lineWidth = 12;
+    context.shadowBlur = 32;
+    context.stroke();
+    context.strokeStyle = "white";
+    context.lineWidth = 6;
+    context.shadowBlur = 18;
     context.stroke();
     context.restore();
   }
   if (!state.holes.length && !state.path.length) drawPrompt();
+  if (state.fingertip) drawFingertip(now);
+}
+
+function drawFingertip(now) {
+  // 確認期光點由小變大，蓄滿（armed）後保持亮光，提示可以開始畫
+  const progress = state.armed ? 1 : Math.min(1, (now - state.holdStart) / 500);
+  context.save();
+  context.fillStyle = `rgba(255,255,255,${0.35 + progress * 0.6})`;
+  context.shadowColor = "white";
+  context.shadowBlur = 8 + progress * 24;
+  context.beginPath();
+  context.arc(state.fingertip.x, state.fingertip.y, 5 + progress * 7, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
 }
 
 function drawPrompt() {
-  const text = "請伸出食指，畫出一個封閉的形狀";
+  const text = "伸出食指停住半秒，指尖發光後畫出封閉形狀";
   const y = state.height - 58;
   context.save();
   context.font = "600 18px 'Noto Sans TC', 'Microsoft JhengHei', sans-serif";
@@ -472,8 +546,9 @@ function render(landmarker, frameTime) {
       state.lastVideoTime = video.currentTime;
       const result = landmarker.detectForVideo(video, now);
       state.hand = (result.landmarks || [])[0] || null;
+      // 手勢狀態機只在有新偵測結果時前進，影像停滯時不會用舊手勢累積蓄力
+      updateHand(state.hand, now);
     }
-    updateHand(state.hand, now);
     updateWorld(now, dt);
     drawWorld(now);
   }
