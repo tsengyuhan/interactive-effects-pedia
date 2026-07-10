@@ -148,5 +148,30 @@ window.EFFECTS = [
     offline: true,
     offlineNote: "",
     hasParams: true
+  },
+  {
+    id: "cut-the-world",
+    title: "手指切割世界",
+    category: "身體動作",
+    description: "伸出食指在鏡頭畫面上畫一個封閉形狀，那塊世界會發光掉落，洞裡露出套用特效的虛擬空間",
+    instructions: "面對鏡頭，伸出食指（其他手指收起）在空中畫一個封閉形狀；路徑閉合後發光 1 秒，那塊畫面便掉落，洞裡透出套用特效的即時畫面。可連續切好幾刀，洞會累積，按右上角「重置世界」復原。可選洞內特效（科技像素／動態亂碼／印刷拼貼／色塊版畫）與調整掉落速度",
+    tech: ["MediaPipe Hands", "getUserMedia", "Canvas 2D"],
+    principle: [
+      "MediaPipe 手部模型即時取得食指指尖座標，以指節距離判定「只伸食指」手勢，成立時記錄軌跡",
+      "軌跡自我相交或首尾靠近即形成封閉多邊形，發光一秒後把該區畫面快照成碎片",
+      "碎片套重力與旋轉掉出畫面；洞用 canvas 裁切成窗口，透出同座標的特效版即時畫面",
+      "四種特效各以降解析度取樣即時重繪：像素量化、亮度字雨、半調印刷網點、色帶版畫平塗"
+    ],
+    requirements: ["攝影機", "建議 Chrome / Edge", "舊機器 fps 較低", "需經 start.bat 或 HTTPS 開啟"],
+    offline: true,
+    offlineNote: "",
+    hasParams: true,
+    why: "探索螢幕後面的虛擬空間，平面的螢幕後可能有著無限的空間。",
+    references: [
+      { label: "切割世界 參考圖 1（動態亂碼）", url: "https://fr.pinterest.com/pin/790592909629265590/" },
+      { label: "切割世界 參考圖 2（科技像素）", url: "https://fr.pinterest.com/pin/790592909629265605/" },
+      { label: "切割世界 參考圖 3（印刷拼貼）", url: "https://fr.pinterest.com/pin/790592909629265577/" },
+      { label: "切割世界 參考圖 4（色塊版畫）", url: "https://fr.pinterest.com/pin/918804761449747082/" }
+    ]
   }
 ];
