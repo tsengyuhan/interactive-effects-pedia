@@ -20,6 +20,7 @@ const state = {
   mode: "tech-pixel",
   fallSpeed: 1,
   grain: 12,
+  rim: 16,
   armed: false,
   holdStart: 0,
   fingertip: null,
@@ -51,23 +52,70 @@ const { Engine: MatterEngine, Bodies, Body: MatterBody, Composite, Vertices } = 
 const engine = MatterEngine.create();
 let floorBody = null;
 
+// 洞緣畫法模仿在牆上打洞：上緣露出一條牆體斷面（厚度帶），斷面下方再落陰影
 function rebuildHoleShadows() {
   shadowCanvas.width = Math.max(1, canvas.width);
   shadowCanvas.height = Math.max(1, canvas.height);
+  const rim = state.rim;
   for (const hole of state.holes) {
     shadowContext.save();
     pathOn(shadowContext, hole);
     shadowContext.clip();
-    // 內陰影：描邊的陰影只落在洞內，加上往下位移的第二道，看起來凹進畫面後方
+
+    // 1. 牆體斷面：整洞填水泥色，再把同形狀往下位移 rim 擦掉，留下上緣月牙厚度帶
+    //    （save/restore 只保護 translate，GCO 需手動歸回 source-over）
     pathOn(shadowContext, hole);
-    shadowContext.strokeStyle = "rgba(0,0,0,0.85)";
-    shadowContext.lineWidth = 4;
+    shadowContext.fillStyle = "#9e978b";
+    shadowContext.fill();
+    shadowContext.globalCompositeOperation = "destination-out";
+    shadowContext.save();
+    shadowContext.translate(0, rim);
+    pathOn(shadowContext, hole);
+    shadowContext.fill();
+    shadowContext.restore();
+    // 斷面下半疊暗色，做出立面轉折
+    shadowContext.globalCompositeOperation = "source-atop";
+    shadowContext.save();
+    shadowContext.translate(0, rim * 0.45);
+    pathOn(shadowContext, hole);
+    shadowContext.fillStyle = "rgba(56,50,44,0.35)";
+    shadowContext.fill();
+    shadowContext.restore();
+    shadowContext.globalCompositeOperation = "source-over";
+
+    // 2. 四周內陰影（畫在斷面之後才不會被填色蓋掉，側邊與底部因此有深度）
+    pathOn(shadowContext, hole);
+    shadowContext.strokeStyle = "rgba(0,0,0,0.8)";
+    shadowContext.lineWidth = 3;
     shadowContext.shadowColor = "rgba(0,0,0,0.9)";
-    shadowContext.shadowBlur = 16;
+    shadowContext.shadowBlur = 22;
     shadowContext.stroke();
-    shadowContext.shadowBlur = 30;
-    shadowContext.shadowOffsetY = 12;
+    shadowContext.shadowBlur = 0;
+
+    // 3. 斷面下方的洞內陰影（位移超過厚度帶，暈在斷面底下）
+    pathOn(shadowContext, hole);
+    shadowContext.strokeStyle = "rgba(0,0,0,0.45)";
+    shadowContext.lineWidth = 3;
+    shadowContext.shadowColor = "rgba(0,0,0,0.85)";
+    shadowContext.shadowBlur = 34;
+    shadowContext.shadowOffsetY = rim + 10;
     shadowContext.stroke();
+    shadowContext.shadowBlur = 0;
+    shadowContext.shadowOffsetY = 0;
+
+    // 4. 斷面與洞內的硬邊交界線＋洞口外緣受光亮線
+    shadowContext.save();
+    shadowContext.translate(0, rim);
+    pathOn(shadowContext, hole);
+    shadowContext.strokeStyle = "rgba(30,26,22,0.85)";
+    shadowContext.lineWidth = 2;
+    shadowContext.stroke();
+    shadowContext.restore();
+    pathOn(shadowContext, hole);
+    shadowContext.strokeStyle = "rgba(255,255,255,0.3)";
+    shadowContext.lineWidth = 1.5;
+    shadowContext.stroke();
+
     shadowContext.restore();
   }
 }
@@ -118,6 +166,20 @@ shell.addParam({
   value: state.grain,
   onChange(value) {
     state.grain = Number(value);
+  }
+});
+
+shell.addParam({
+  type: "range",
+  key: "rim",
+  label: "洞緣厚度",
+  min: 6,
+  max: 36,
+  step: 1,
+  value: state.rim,
+  onChange(value) {
+    state.rim = Number(value);
+    rebuildHoleShadows();
   }
 });
 
