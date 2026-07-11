@@ -41,7 +41,8 @@ const state = {
   lumLow: 0,
   lumHigh: 1,
   prevLums: null,
-  physicsAccum: 0
+  physicsAccum: 0,
+  shadowsDirty: false
 };
 
 const errorMessage = "請允許攝影機權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
@@ -52,38 +53,43 @@ const { Engine: MatterEngine, Bodies, Body: MatterBody, Composite, Vertices } = 
 const engine = MatterEngine.create();
 let floorBody = null;
 
-// 洞緣畫法模仿在牆上打洞：上緣露出一條牆體斷面（厚度帶），斷面下方再落陰影
+// 洞緣畫法模仿在牆上打洞：左上緣露出牆體斷面（厚度帶），材質取切割當下的畫面色壓暗。
+// 需要 baseCanvas 有當幀畫面，所以不直接呼叫，改標記 shadowsDirty、由 render 迴圈重建
 function rebuildHoleShadows() {
   shadowCanvas.width = Math.max(1, canvas.width);
   shadowCanvas.height = Math.max(1, canvas.height);
   const rim = state.rim;
+  // 位移往右下（光源在左上的透視），厚度帶落在洞的左上內緣
+  const rimX = rim * 0.7;
+  const rimY = rim * 0.7;
   for (const hole of state.holes) {
     shadowContext.save();
     pathOn(shadowContext, hole);
     shadowContext.clip();
 
-    // 1. 牆體斷面：整洞填水泥色，再把同形狀往下位移 rim 擦掉，留下上緣月牙厚度帶
+    // 1. 牆體斷面：先鋪當下畫面當牆體材質，把同形狀往右下位移擦掉留下厚度帶，再整帶壓暗
     //    （save/restore 只保護 translate，GCO 需手動歸回 source-over）
-    pathOn(shadowContext, hole);
-    shadowContext.fillStyle = "#9e978b";
-    shadowContext.fill();
+    shadowContext.drawImage(baseCanvas, 0, 0);
     shadowContext.globalCompositeOperation = "destination-out";
     shadowContext.save();
-    shadowContext.translate(0, rim);
+    shadowContext.translate(rimX, rimY);
     pathOn(shadowContext, hole);
     shadowContext.fill();
     shadowContext.restore();
-    // 斷面下半疊暗色，做出立面轉折
     shadowContext.globalCompositeOperation = "source-atop";
-    shadowContext.save();
-    shadowContext.translate(0, rim * 0.45);
     pathOn(shadowContext, hole);
-    shadowContext.fillStyle = "rgba(56,50,44,0.35)";
+    shadowContext.fillStyle = "rgba(25,20,16,0.42)";
+    shadowContext.fill();
+    // 斷面靠洞內側再疊暗，做出立面轉折
+    shadowContext.save();
+    shadowContext.translate(rimX * 0.45, rimY * 0.45);
+    pathOn(shadowContext, hole);
+    shadowContext.fillStyle = "rgba(30,25,20,0.4)";
     shadowContext.fill();
     shadowContext.restore();
     shadowContext.globalCompositeOperation = "source-over";
 
-    // 2. 四周內陰影（畫在斷面之後才不會被填色蓋掉，側邊與底部因此有深度）
+    // 2. 四周內陰影（畫在斷面之後才不會被蓋掉，側邊與底部因此有深度）
     pathOn(shadowContext, hole);
     shadowContext.strokeStyle = "rgba(0,0,0,0.8)";
     shadowContext.lineWidth = 3;
@@ -92,20 +98,22 @@ function rebuildHoleShadows() {
     shadowContext.stroke();
     shadowContext.shadowBlur = 0;
 
-    // 3. 斷面下方的洞內陰影（位移超過厚度帶，暈在斷面底下）
+    // 3. 斷面後方的洞內陰影（位移超過厚度帶，暈在斷面底下）
     pathOn(shadowContext, hole);
     shadowContext.strokeStyle = "rgba(0,0,0,0.45)";
     shadowContext.lineWidth = 3;
     shadowContext.shadowColor = "rgba(0,0,0,0.85)";
     shadowContext.shadowBlur = 34;
-    shadowContext.shadowOffsetY = rim + 10;
+    shadowContext.shadowOffsetX = rimX + 7;
+    shadowContext.shadowOffsetY = rimY + 7;
     shadowContext.stroke();
     shadowContext.shadowBlur = 0;
+    shadowContext.shadowOffsetX = 0;
     shadowContext.shadowOffsetY = 0;
 
     // 4. 斷面與洞內的硬邊交界線＋洞口外緣受光亮線
     shadowContext.save();
-    shadowContext.translate(0, rim);
+    shadowContext.translate(rimX, rimY);
     pathOn(shadowContext, hole);
     shadowContext.strokeStyle = "rgba(30,26,22,0.85)";
     shadowContext.lineWidth = 2;
@@ -179,7 +187,7 @@ shell.addParam({
   value: state.rim,
   onChange(value) {
     state.rim = Number(value);
-    rebuildHoleShadows();
+    state.shadowsDirty = true;
   }
 });
 
@@ -208,7 +216,7 @@ shell.addButton({
     state.pathFadeStart = 0;
     state.armed = false;
     state.holdStart = 0;
-    rebuildHoleShadows();
+    state.shadowsDirty = true;
   }
 });
 
@@ -246,7 +254,7 @@ function resize() {
   baseCanvas.width = canvas.width;
   baseCanvas.height = canvas.height;
   updateFloor();
-  rebuildHoleShadows();
+  state.shadowsDirty = true;
 }
 
 function distance(a, b) {
@@ -541,7 +549,7 @@ function createFragment(glow, now) {
   snapshotContext.drawImage(baseCanvas, 0, 0);
   snapshotContext.restore();
   state.holes.push(points);
-  rebuildHoleShadows();
+  state.shadowsDirty = true;
   // ponytail: 物理形狀用凸包，接近視覺形狀又免多邊形分解；凹形的凹口處堆疊會些微懸空
   const hull = convexHull(points.map((point) => ({ x: point.x - minX, y: point.y - minY })));
   if (hull.length < 3) return;
@@ -740,6 +748,11 @@ function render(landmarker, frameTime) {
       updateHand(state.hand, now);
     }
     updateWorld(now, dt);
+    // 洞有增減或尺寸/厚度變動時，趁 baseCanvas 是當幀畫面重建洞緣陰影層
+    if (state.shadowsDirty) {
+      rebuildHoleShadows();
+      state.shadowsDirty = false;
+    }
     drawWorld(now);
   }
   state.animationId = window.requestAnimationFrame((time) => render(landmarker, time));
