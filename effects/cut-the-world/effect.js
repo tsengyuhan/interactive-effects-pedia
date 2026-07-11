@@ -10,6 +10,9 @@ const effectCanvas = document.createElement("canvas");
 const effectContext = effectCanvas.getContext("2d", { willReadFrequently: true });
 const sampleCanvas = document.createElement("canvas");
 const sampleContext = sampleCanvas.getContext("2d", { willReadFrequently: true });
+// 洞的內陰影快取層：只在洞增減或 resize 時重畫，避免每幀付 blur 成本
+const shadowCanvas = document.createElement("canvas");
+const shadowContext = shadowCanvas.getContext("2d");
 
 const state = {
   width: 1,
@@ -36,11 +39,45 @@ const state = {
   lastEffectTime: 0,
   lumLow: 0,
   lumHigh: 1,
-  prevLums: null
+  prevLums: null,
+  physicsAccum: 0
 };
 
 const errorMessage = "請允許攝影機權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
 const matrixAlphabet = "アイウエオカキクケコサシスセソタチツテトナニヌネノ0123456789@#$%&*";
+
+// 碎片剛體物理交給 Matter.js：依形狀翻倒、彈跳、堆疊，支撐消失自動掉落
+const { Engine: MatterEngine, Bodies, Body: MatterBody, Composite, Vertices } = window.Matter;
+const engine = MatterEngine.create();
+let floorBody = null;
+
+function rebuildHoleShadows() {
+  shadowCanvas.width = Math.max(1, canvas.width);
+  shadowCanvas.height = Math.max(1, canvas.height);
+  for (const hole of state.holes) {
+    shadowContext.save();
+    pathOn(shadowContext, hole);
+    shadowContext.clip();
+    // 內陰影：描邊的陰影只落在洞內，加上往下位移的第二道，看起來凹進畫面後方
+    pathOn(shadowContext, hole);
+    shadowContext.strokeStyle = "rgba(0,0,0,0.85)";
+    shadowContext.lineWidth = 4;
+    shadowContext.shadowColor = "rgba(0,0,0,0.9)";
+    shadowContext.shadowBlur = 16;
+    shadowContext.stroke();
+    shadowContext.shadowBlur = 30;
+    shadowContext.shadowOffsetY = 12;
+    shadowContext.stroke();
+    shadowContext.restore();
+  }
+}
+
+function updateFloor() {
+  if (floorBody) Composite.remove(engine.world, floorBody);
+  // 地板頂面貼齊畫布底緣，碎片以實際多邊形頂點接觸，不會浮空
+  floorBody = Bodies.rectangle(state.width / 2, state.height + 60, state.width * 4, 120, { isStatic: true });
+  Composite.add(engine.world, floorBody);
+}
 
 canvas.style.position = "absolute";
 canvas.style.inset = "0";
@@ -94,12 +131,14 @@ shell.addParam({
   value: state.fallSpeed,
   onChange(value) {
     state.fallSpeed = Number(value);
+    engine.gravity.y = state.fallSpeed;
   }
 });
 
 shell.addButton({
   label: "重置世界",
   onClick() {
+    for (const fragment of state.fragments) Composite.remove(engine.world, fragment.body);
     state.holes = [];
     state.glows = [];
     state.fragments = [];
@@ -107,6 +146,7 @@ shell.addButton({
     state.pathFadeStart = 0;
     state.armed = false;
     state.holdStart = 0;
+    rebuildHoleShadows();
   }
 });
 
@@ -126,11 +166,15 @@ function resize() {
     for (const point of state.path) scalePoint(point, sx, sy);
     for (const hole of state.holes) for (const point of hole) scalePoint(point, sx, sy);
     for (const glow of state.glows) for (const point of glow.points) scalePoint(point, sx, sy);
+    // ponytail: 非等比縮放時剛體與貼圖用平均比例近似，碎片只活幾秒，誤差可接受
+    const s = (sx + sy) / 2;
     for (const fragment of state.fragments) {
-      fragment.centerX *= sx;
-      fragment.centerY *= sy;
-      fragment.scaleX *= sx;
-      fragment.scaleY *= sy;
+      MatterBody.setPosition(fragment.body, {
+        x: fragment.body.position.x * sx,
+        y: fragment.body.position.y * sy
+      });
+      MatterBody.scale(fragment.body, s, s);
+      fragment.scale *= s;
     }
   }
   state.width = width;
@@ -139,6 +183,8 @@ function resize() {
   canvas.height = Math.floor(height);
   baseCanvas.width = canvas.width;
   baseCanvas.height = canvas.height;
+  updateFloor();
+  rebuildHoleShadows();
 }
 
 function distance(a, b) {
@@ -433,82 +479,50 @@ function createFragment(glow, now) {
   snapshotContext.drawImage(baseCanvas, 0, 0);
   snapshotContext.restore();
   state.holes.push(points);
+  rebuildHoleShadows();
+  // ponytail: 物理形狀用凸包，接近視覺形狀又免多邊形分解；凹形的凹口處堆疊會些微懸空
+  const hull = convexHull(points.map((point) => ({ x: point.x - minX, y: point.y - minY })));
+  if (hull.length < 3) return;
+  const centroid = Vertices.centre(hull);
+  const body = Bodies.fromVertices(minX + centroid.x, minY + centroid.y, [hull], {
+    restitution: 0.35,
+    friction: 0.6,
+    frictionAir: 0.005
+  });
+  if (!body) return; // 退化形狀建不出剛體就只留洞
+  MatterBody.setVelocity(body, { x: (Math.random() - 0.5) * 2, y: 0 });
+  MatterBody.setAngularVelocity(body, (Math.random() - 0.5) * 0.1);
+  Composite.add(engine.world, body);
   state.fragments.push({
     image: snapshot,
-    centerX: (minX + maxX) / 2,
-    centerY: (minY + maxY) / 2,
-    vx: Math.random() * 60 - 30,
-    vy: 0,
-    angle: 0,
-    angularVelocity: Math.random() * 1.6 - 0.8,
-    scaleX: 1,
-    scaleY: 1,
-    resting: false,
+    body,
+    offsetX: centroid.x,
+    offsetY: centroid.y,
+    scale: 1,
+    stillSince: 0,
     restStart: 0
   });
 }
 
-// ponytail: 碰撞用圓形近似（半徑取寬高平均的一半），不規則形狀邊角會些微穿插，夠玩就好
-function fragmentRadius(fragment) {
-  return (fragment.image.width * fragment.scaleX + fragment.image.height * fragment.scaleY) / 4;
-}
-
-function collideFragments(a, b, now) {
-  if (a.resting && b.resting) return; // 都落地就不再互推，允許重疊堆疊
-  // 淡出中的碎片不再參與碰撞，避免快消失的碎片還在半空支撐或反彈新碎片
-  if ((a.restStart && now - a.restStart > 8000) || (b.restStart && now - b.restStart > 8000)) return;
-  const ra = fragmentRadius(a);
-  const rb = fragmentRadius(b);
-  let dx = b.centerX - a.centerX;
-  let dy = b.centerY - a.centerY;
-  let dist = Math.hypot(dx, dy);
-  if (dist >= ra + rb) return;
-  if (dist < 0.0001) {
-    dx = 0;
-    dy = -1;
-    dist = 1;
+// Andrew 單調鏈凸包
+function convexHull(points) {
+  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y);
+  if (sorted.length < 3) return sorted;
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const lower = [];
+  for (const point of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) lower.pop();
+    lower.push(point);
   }
-  const nx = dx / dist;
-  const ny = dy / dist;
-  const overlap = ra + rb - dist;
-  if (a.resting || b.resting) {
-    // 落地的碎片視為不動，只反彈掉落中的那片
-    const mover = a.resting ? b : a;
-    const sx = a.resting ? nx : -nx;
-    const sy = a.resting ? ny : -ny;
-    mover.centerX += sx * overlap;
-    mover.centerY += sy * overlap;
-    const vn = mover.vx * sx + mover.vy * sy;
-    if (vn < 0) {
-      mover.vx -= (1 + 0.45) * vn * sx;
-      mover.vy -= (1 + 0.45) * vn * sy;
-      mover.angularVelocity *= 0.9;
-      // 只有被下方碎片頂住（支撐方向朝上）且反彈夠小才落定，側撞不會停在半空
-      if (sy < -0.4 && Math.hypot(mover.vx, mover.vy) < 90) {
-        mover.vx = 0;
-        mover.vy = 0;
-        mover.resting = true;
-        if (!mover.restStart) mover.restStart = now;
-      }
-    }
-    return;
+  const upper = [];
+  for (let i = sorted.length - 1; i >= 0; i -= 1) {
+    const point = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) upper.pop();
+    upper.push(point);
   }
-  // 兩片都在掉落：對半推開重疊，法線方向交換速度並帶點旋轉
-  a.centerX -= nx * overlap / 2;
-  a.centerY -= ny * overlap / 2;
-  b.centerX += nx * overlap / 2;
-  b.centerY += ny * overlap / 2;
-  const vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
-  if (vn < 0) {
-    const impulse = -(1 + 0.45) * vn / 2;
-    a.vx -= impulse * nx;
-    a.vy -= impulse * ny;
-    b.vx += impulse * nx;
-    b.vy += impulse * ny;
-    const vt = (b.vx - a.vx) * -ny + (b.vy - a.vy) * nx;
-    a.angularVelocity += vt * 0.003;
-    b.angularVelocity -= vt * 0.003;
-  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
 }
 
 function updateWorld(now, dt) {
@@ -518,36 +532,34 @@ function updateWorld(now, dt) {
     else remainingGlows.push(glow);
   }
   state.glows = remainingGlows;
+
+  // 固定 timestep 累積器：一幀最多補 3 步，低 FPS 時物理速度不會跟著幀率變慢
+  state.physicsAccum = Math.min(state.physicsAccum + dt * 1000, 50);
+  let steps = 0;
+  while (state.physicsAccum >= 16.67 && steps < 3) {
+    MatterEngine.update(engine, 16.67);
+    state.physicsAccum -= 16.67;
+    steps += 1;
+  }
+
+  const keep = [];
   for (const fragment of state.fragments) {
-    if (!fragment.resting) {
-      // ponytail: 終端速度上限防高速穿透，沒做子步進碰撞，dt 極端時小碎片間仍可能互穿
-      fragment.vy = Math.min(fragment.vy + 1800 * state.fallSpeed * dt, 2400);
-      fragment.centerX += fragment.vx * dt;
-      fragment.centerY += fragment.vy * dt;
-      fragment.angle += fragment.angularVelocity * dt;
+    const body = fragment.body;
+    // 幾乎靜止並持續 0.4 秒視為落定，開始 8 秒停留計時；被撞飛或支撐消失會再動，但計時不重來
+    if (body.speed < 0.2 && body.angularSpeed < 0.02) {
+      if (!fragment.stillSince) fragment.stillSince = now;
+      if (!fragment.restStart && now - fragment.stillSince > 400) fragment.restStart = now;
+    } else {
+      fragment.stillSince = 0;
     }
-    // 底部地板：反彈到夠小就落地，開始 8 秒停留計時
-    const radius = fragmentRadius(fragment);
-    if (fragment.centerY + radius >= state.height) {
-      fragment.centerY = state.height - radius;
-      if (fragment.vy > 0) fragment.vy = -fragment.vy * 0.45;
-      fragment.vx *= 0.92;
-      fragment.angularVelocity *= 0.9;
-      if (Math.abs(fragment.vy) < 80) {
-        fragment.vy = 0;
-        fragment.vx = 0;
-        fragment.resting = true;
-        if (!fragment.restStart) fragment.restStart = now;
-      }
+    // 落定 8 秒後淡出 0.6 秒移除；移除剛體後，堆在上面的碎片會自動掉落
+    if (fragment.restStart && now - fragment.restStart >= 8600) {
+      Composite.remove(engine.world, body);
+    } else {
+      keep.push(fragment);
     }
   }
-  for (let i = 0; i < state.fragments.length; i += 1) {
-    for (let j = i + 1; j < state.fragments.length; j += 1) {
-      collideFragments(state.fragments[i], state.fragments[j], now);
-    }
-  }
-  // 落地 8 秒後淡出 0.6 秒移除
-  state.fragments = state.fragments.filter((fragment) => !fragment.restStart || now - fragment.restStart < 8600);
+  state.fragments = keep;
 }
 
 function drawWorld(now) {
@@ -565,13 +577,8 @@ function drawWorld(now) {
     context.clip();
     context.drawImage(effectCanvas, 0, 0, state.width, state.height);
     context.restore();
-    context.save();
-    pathOn(context, hole);
-    context.strokeStyle = "rgba(0,0,0,0.5)";
-    context.lineWidth = 3;
-    context.stroke();
-    context.restore();
   }
+  if (state.holes.length) context.drawImage(shadowCanvas, 0, 0);
   for (const glow of state.glows) {
     const progress = Math.min(1, (now - glow.start) / 1000);
     context.save();
@@ -591,10 +598,11 @@ function drawWorld(now) {
       : 1;
     context.save();
     context.globalAlpha = alpha;
-    context.translate(fragment.centerX, fragment.centerY);
-    context.rotate(fragment.angle);
-    context.scale(fragment.scaleX, fragment.scaleY);
-    context.drawImage(fragment.image, -fragment.image.width / 2, -fragment.image.height / 2);
+    context.translate(fragment.body.position.x, fragment.body.position.y);
+    context.rotate(fragment.body.angle);
+    context.scale(fragment.scale, fragment.scale);
+    // 剛體繞質心旋轉，貼圖以凸包質心對位
+    context.drawImage(fragment.image, -fragment.offsetX, -fragment.offsetY);
     context.restore();
   }
   if (state.path.length > 1) {
@@ -711,6 +719,9 @@ window.addEventListener("pagehide", () => {
   window.cancelAnimationFrame(state.animationId);
   const stream = video.srcObject;
   if (stream) for (const track of stream.getTracks()) track.stop();
+  Composite.clear(engine.world, false);
+  MatterEngine.clear(engine);
+  floorBody = null;
 });
 
 start();

@@ -7,6 +7,7 @@
 - MediaPipe Hands
 - getUserMedia
 - Canvas 2D
+- Matter.js（碎片剛體物理）
 
 ## 需求
 
