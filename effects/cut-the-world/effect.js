@@ -33,7 +33,10 @@ const state = {
   previousFrameTime: 0,
   matrixChars: [],
   matrixColumns: [],
-  lastEffectTime: 0
+  lastEffectTime: 0,
+  lumLow: 0,
+  lumHigh: 1,
+  prevLums: null
 };
 
 const errorMessage = "請允許攝影機權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
@@ -64,6 +67,7 @@ shell.addParam({
   ],
   onChange(value) {
     state.mode = value;
+    state.prevLums = null; // 避免切回動態亂碼時拿舊幀比較，整片誤判成移動閃白
   }
 });
 
@@ -123,8 +127,6 @@ function resize() {
     for (const hole of state.holes) for (const point of hole) scalePoint(point, sx, sy);
     for (const glow of state.glows) for (const point of glow.points) scalePoint(point, sx, sy);
     for (const fragment of state.fragments) {
-      fragment.x *= sx;
-      fragment.y *= sy;
       fragment.centerX *= sx;
       fragment.centerY *= sy;
       fragment.scaleX *= sx;
@@ -280,14 +282,43 @@ function prepareSample(cellSize) {
   return { width, height, cols, rows };
 }
 
+// 自動對比：把當幀亮度範圍拉伸到 0..1，低通平滑避免對比隨畫面跳動
+function normalizedLuminance(pixels, count) {
+  const lums = new Float32Array(count);
+  let low = 1;
+  let high = 0;
+  for (let i = 0; i < count; i += 1) {
+    const p = i * 4;
+    const l = (pixels[p] * 0.21 + pixels[p + 1] * 0.72 + pixels[p + 2] * 0.07) / 255;
+    lums[i] = l;
+    if (l < low) low = l;
+    if (l > high) high = l;
+  }
+  state.lumLow += (low - state.lumLow) * 0.15;
+  state.lumHigh += (high - state.lumHigh) * 0.15;
+  const range = Math.max(0.08, state.lumHigh - state.lumLow);
+  for (let i = 0; i < count; i += 1) {
+    lums[i] = Math.min(1, Math.max(0, (lums[i] - state.lumLow) / range));
+  }
+  return lums;
+}
+
 function renderTechPixel() {
   const grid = state.grain;
   const size = prepareSample(grid);
   const image = sampleContext.getImageData(0, 0, size.cols, size.rows);
+  // 借 normalizedLuminance 更新平滑後的亮度 min/max，RGB 依同一範圍拉伸後量化，
+  // 低對比或偏暗畫面也能用滿亮度階；再壓紅抬藍做冷色科技感
+  normalizedLuminance(image.data, size.cols * size.rows);
+  const low = state.lumLow * 255;
+  const range = Math.max(0.08, state.lumHigh - state.lumLow);
   for (let i = 0; i < image.data.length; i += 4) {
-    image.data[i] = Math.round(image.data[i] / 85) * 70;
-    image.data[i + 1] = Math.min(255, Math.round(image.data[i + 1] / 85) * 85 + 18);
-    image.data[i + 2] = Math.min(255, Math.round(image.data[i + 2] / 85) * 85 + 30);
+    for (let c = 0; c < 3; c += 1) {
+      const v = (image.data[i + c] - low) / range;
+      image.data[i + c] = Math.round(Math.min(255, Math.max(0, v)) / 85) * 85;
+    }
+    image.data[i] = Math.round(image.data[i] * 0.82);
+    image.data[i + 2] = Math.min(255, image.data[i + 2] + 26);
   }
   sampleContext.putImageData(image, 0, 0);
   effectContext.imageSmoothingEnabled = false;
@@ -307,7 +338,10 @@ function renderMatrix(now) {
   if (state.matrixChars.length !== total) {
     state.matrixChars = Array.from({ length: total }, () => Math.floor(Math.random() * matrixAlphabet.length));
     state.matrixColumns = Array.from({ length: size.cols }, (_, column) => (column * 7) % size.rows);
+    state.prevLums = null;
   }
+  const lums = normalizedLuminance(pixels, total);
+  const prev = state.prevLums && state.prevLums.length === total ? state.prevLums : null;
   effectContext.fillStyle = "#020604";
   effectContext.fillRect(0, 0, size.width, size.height);
   effectContext.font = `700 ${cell}px monospace`;
@@ -317,26 +351,34 @@ function renderMatrix(now) {
     for (let x = 0; x < size.cols; x += 1) {
       const index = y * size.cols + x;
       if (Math.random() < 0.05) state.matrixChars[index] = Math.floor(Math.random() * matrixAlphabet.length);
-      const p = index * 4;
-      const light = (pixels[p] * 0.21 + pixels[p + 1] * 0.72 + pixels[p + 2] * 0.07) / 255;
+      const t = lums[index];
+      const moved = prev ? Math.abs(t - prev[index]) > 0.22 : false;
       const head = Math.floor(state.matrixColumns[x] + now * 0.004) % size.rows === y;
-      effectContext.fillStyle = head ? "rgba(235,255,242,0.98)" : `rgba(0,255,102,${0.12 + light * 0.82})`;
+      // 暗處留黑、亮部分層、移動的格子閃白，人形輪廓與動作才看得出來
+      if (!head && !moved && t < 0.1) continue;
+      if (moved) effectContext.fillStyle = "rgba(245,255,250,0.95)";
+      else if (head) effectContext.fillStyle = "rgba(235,255,242,0.9)";
+      else if (t > 0.72) effectContext.fillStyle = "rgba(190,255,214,0.95)";
+      else effectContext.fillStyle = `rgba(0,255,102,${0.25 + t * 0.75})`;
       effectContext.fillText(matrixAlphabet[state.matrixChars[index]], x * cell + cell / 2, y * cell + cell / 2);
     }
   }
+  state.prevLums = lums;
 }
 
 function renderHalftone() {
   const cell = state.grain;
   const size = prepareSample(cell);
   const pixels = sampleContext.getImageData(0, 0, size.cols, size.rows).data;
+  const lums = normalizedLuminance(pixels, size.cols * size.rows);
   effectContext.fillStyle = "#f2ead8";
   effectContext.fillRect(0, 0, size.width, size.height);
   for (let y = 0; y < size.rows; y += 1) {
     for (let x = 0; x < size.cols; x += 1) {
-      const p = (y * size.cols + x) * 4;
-      const darkness = 1 - (pixels[p] * 0.21 + pixels[p + 1] * 0.72 + pixels[p + 2] * 0.07) / 255;
-      const radius = darkness * cell * 0.65;
+      const darkness = 1 - lums[y * size.cols + x];
+      // gamma 讓中間調不會整片灰，亮處直接留白
+      const radius = Math.pow(darkness, 1.35) * cell * 0.72;
+      if (radius < 0.5) continue;
       effectContext.fillStyle = "rgba(211,51,68,0.55)";
       effectContext.beginPath();
       effectContext.arc(x * cell + cell / 2 + 2, y * cell + cell / 2 + 2, radius * 0.8, 0, Math.PI * 2);
@@ -350,30 +392,21 @@ function renderHalftone() {
 }
 
 function renderWoodcut() {
-  const width = 240;
-  const height = Math.max(1, Math.round(width * state.height / state.width));
-  if (sampleCanvas.width !== width || sampleCanvas.height !== height) {
-    sampleCanvas.width = width;
-    sampleCanvas.height = height;
-  }
-  drawMirroredVideo(sampleContext, width, height);
-  const image = sampleContext.getImageData(0, 0, width, height);
+  // 一格＝一個色塊，顆粒參數同樣生效；亮度自動對比後分四個色帶
+  const size = prepareSample(state.grain);
+  const image = sampleContext.getImageData(0, 0, size.cols, size.rows);
+  const lums = normalizedLuminance(image.data, size.cols * size.rows);
   const palette = [[26, 22, 20], [200, 69, 44], [232, 217, 184], [245, 239, 224]];
-  for (let i = 0; i < image.data.length; i += 4) {
-    const light = image.data[i] * 0.21 + image.data[i + 1] * 0.72 + image.data[i + 2] * 0.07;
-    const color = palette[Math.min(3, Math.floor(light / 64))];
-    image.data[i] = color[0];
-    image.data[i + 1] = color[1];
-    image.data[i + 2] = color[2];
+  for (let i = 0; i < lums.length; i += 1) {
+    const color = palette[Math.min(3, Math.floor(lums[i] * 4))];
+    const p = i * 4;
+    image.data[p] = color[0];
+    image.data[p + 1] = color[1];
+    image.data[p + 2] = color[2];
   }
   sampleContext.putImageData(image, 0, 0);
-  const outputHeight = Math.max(1, Math.round(480 * state.height / state.width));
-  if (effectCanvas.width !== 480 || effectCanvas.height !== outputHeight) {
-    effectCanvas.width = 480;
-    effectCanvas.height = outputHeight;
-  }
   effectContext.imageSmoothingEnabled = false;
-  effectContext.drawImage(sampleCanvas, 0, 0, effectCanvas.width, effectCanvas.height);
+  effectContext.drawImage(sampleCanvas, 0, 0, size.width, size.height);
 }
 
 function renderEffect(now) {
@@ -383,7 +416,7 @@ function renderEffect(now) {
   else renderTechPixel();
 }
 
-function createFragment(glow) {
+function createFragment(glow, now) {
   const points = glow.points;
   const minX = Math.floor(Math.min(...points.map((point) => point.x)));
   const minY = Math.floor(Math.min(...points.map((point) => point.y)));
@@ -402,8 +435,6 @@ function createFragment(glow) {
   state.holes.push(points);
   state.fragments.push({
     image: snapshot,
-    x: minX,
-    y: minY,
     centerX: (minX + maxX) / 2,
     centerY: (minY + maxY) / 2,
     vx: Math.random() * 60 - 30,
@@ -411,27 +442,112 @@ function createFragment(glow) {
     angle: 0,
     angularVelocity: Math.random() * 1.6 - 0.8,
     scaleX: 1,
-    scaleY: 1
+    scaleY: 1,
+    resting: false,
+    restStart: 0
   });
+}
+
+// ponytail: 碰撞用圓形近似（半徑取寬高平均的一半），不規則形狀邊角會些微穿插，夠玩就好
+function fragmentRadius(fragment) {
+  return (fragment.image.width * fragment.scaleX + fragment.image.height * fragment.scaleY) / 4;
+}
+
+function collideFragments(a, b, now) {
+  if (a.resting && b.resting) return; // 都落地就不再互推，允許重疊堆疊
+  // 淡出中的碎片不再參與碰撞，避免快消失的碎片還在半空支撐或反彈新碎片
+  if ((a.restStart && now - a.restStart > 8000) || (b.restStart && now - b.restStart > 8000)) return;
+  const ra = fragmentRadius(a);
+  const rb = fragmentRadius(b);
+  let dx = b.centerX - a.centerX;
+  let dy = b.centerY - a.centerY;
+  let dist = Math.hypot(dx, dy);
+  if (dist >= ra + rb) return;
+  if (dist < 0.0001) {
+    dx = 0;
+    dy = -1;
+    dist = 1;
+  }
+  const nx = dx / dist;
+  const ny = dy / dist;
+  const overlap = ra + rb - dist;
+  if (a.resting || b.resting) {
+    // 落地的碎片視為不動，只反彈掉落中的那片
+    const mover = a.resting ? b : a;
+    const sx = a.resting ? nx : -nx;
+    const sy = a.resting ? ny : -ny;
+    mover.centerX += sx * overlap;
+    mover.centerY += sy * overlap;
+    const vn = mover.vx * sx + mover.vy * sy;
+    if (vn < 0) {
+      mover.vx -= (1 + 0.45) * vn * sx;
+      mover.vy -= (1 + 0.45) * vn * sy;
+      mover.angularVelocity *= 0.9;
+      // 只有被下方碎片頂住（支撐方向朝上）且反彈夠小才落定，側撞不會停在半空
+      if (sy < -0.4 && Math.hypot(mover.vx, mover.vy) < 90) {
+        mover.vx = 0;
+        mover.vy = 0;
+        mover.resting = true;
+        if (!mover.restStart) mover.restStart = now;
+      }
+    }
+    return;
+  }
+  // 兩片都在掉落：對半推開重疊，法線方向交換速度並帶點旋轉
+  a.centerX -= nx * overlap / 2;
+  a.centerY -= ny * overlap / 2;
+  b.centerX += nx * overlap / 2;
+  b.centerY += ny * overlap / 2;
+  const vn = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
+  if (vn < 0) {
+    const impulse = -(1 + 0.45) * vn / 2;
+    a.vx -= impulse * nx;
+    a.vy -= impulse * ny;
+    b.vx += impulse * nx;
+    b.vy += impulse * ny;
+    const vt = (b.vx - a.vx) * -ny + (b.vy - a.vy) * nx;
+    a.angularVelocity += vt * 0.003;
+    b.angularVelocity -= vt * 0.003;
+  }
 }
 
 function updateWorld(now, dt) {
   const remainingGlows = [];
   for (const glow of state.glows) {
-    if (now - glow.start >= 1000) createFragment(glow);
+    if (now - glow.start >= 1000) createFragment(glow, now);
     else remainingGlows.push(glow);
   }
   state.glows = remainingGlows;
   for (const fragment of state.fragments) {
-    fragment.vy += 1800 * state.fallSpeed * dt;
-    fragment.x += fragment.vx * dt;
-    fragment.y += fragment.vy * dt;
-    fragment.centerX += fragment.vx * dt;
-    fragment.centerY += fragment.vy * dt;
-    fragment.angle += fragment.angularVelocity * dt;
+    if (!fragment.resting) {
+      // ponytail: 終端速度上限防高速穿透，沒做子步進碰撞，dt 極端時小碎片間仍可能互穿
+      fragment.vy = Math.min(fragment.vy + 1800 * state.fallSpeed * dt, 2400);
+      fragment.centerX += fragment.vx * dt;
+      fragment.centerY += fragment.vy * dt;
+      fragment.angle += fragment.angularVelocity * dt;
+    }
+    // 底部地板：反彈到夠小就落地，開始 8 秒停留計時
+    const radius = fragmentRadius(fragment);
+    if (fragment.centerY + radius >= state.height) {
+      fragment.centerY = state.height - radius;
+      if (fragment.vy > 0) fragment.vy = -fragment.vy * 0.45;
+      fragment.vx *= 0.92;
+      fragment.angularVelocity *= 0.9;
+      if (Math.abs(fragment.vy) < 80) {
+        fragment.vy = 0;
+        fragment.vx = 0;
+        fragment.resting = true;
+        if (!fragment.restStart) fragment.restStart = now;
+      }
+    }
   }
-  // 用旋轉後的最大半徑（半對角線）判斷完全掉出畫面，避免寬扁碎片旋轉時提早消失
-  state.fragments = state.fragments.filter((fragment) => fragment.centerY - Math.hypot(fragment.image.width * fragment.scaleX, fragment.image.height * fragment.scaleY) / 2 < state.height);
+  for (let i = 0; i < state.fragments.length; i += 1) {
+    for (let j = i + 1; j < state.fragments.length; j += 1) {
+      collideFragments(state.fragments[i], state.fragments[j], now);
+    }
+  }
+  // 落地 8 秒後淡出 0.6 秒移除
+  state.fragments = state.fragments.filter((fragment) => !fragment.restStart || now - fragment.restStart < 8600);
 }
 
 function drawWorld(now) {
@@ -470,7 +586,11 @@ function drawWorld(now) {
     context.restore();
   }
   for (const fragment of state.fragments) {
+    const alpha = fragment.restStart
+      ? Math.min(1, Math.max(0, 1 - (now - fragment.restStart - 8000) / 600))
+      : 1;
     context.save();
+    context.globalAlpha = alpha;
     context.translate(fragment.centerX, fragment.centerY);
     context.rotate(fragment.angle);
     context.scale(fragment.scaleX, fragment.scaleY);
