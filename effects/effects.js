@@ -173,5 +173,27 @@ window.EFFECTS = [
       { label: "切割世界 參考圖 3（印刷拼貼）", url: "https://fr.pinterest.com/pin/790592909629265577/" },
       { label: "切割世界 參考圖 4（色塊版畫）", url: "https://fr.pinterest.com/pin/918804761449747082/" }
     ]
+  },
+  {
+    id: "crystal-lens",
+    title: "放大鏡",
+    category: "網頁互動",
+    description: "一顆玻璃透鏡跟著滑鼠在 webcam 畫面上滑動，可切換放大鏡、一般玻璃、毛玻璃三種鏡片",
+    instructions: "面對鏡頭並移動滑鼠（或手指拖曳），玻璃透鏡會平滑跟著游標；可切換鏡片模式，並調整鏡片大小、放大倍率、折射扭曲、邊緣色散、邊緣高光與毛玻璃模糊",
+    tech: ["WebGL", "GLSL", "getUserMedia"],
+    principle: [
+      "webcam 畫面上傳成 WebGL 紋理，整個畫面交給 fragment shader 逐像素重算",
+      "透鏡內把取樣座標往鏡心縮放做出放大，越靠邊緣偏移越大，模擬厚玻璃折射",
+      "RGB 三色用略微不同的縮放取樣，邊緣出現彩虹色散；再疊上弧形高光、邊緣壓暗與外圈落影做出玻璃厚度",
+      "毛玻璃用黃金角螺旋多點取樣平均成模糊，再混入一點白霧"
+    ],
+    requirements: ["攝影機", "支援 WebGL 的瀏覽器（建議 Chrome / Edge）", "需經 start.bat 或 HTTPS 開啟"],
+    offline: true,
+    offlineNote: "",
+    hasParams: true,
+    why: "測試網頁可以製作什麼樣的玻璃效果。",
+    references: [
+      { label: "Crystal Lens Cursor（Brik）", url: "https://brik.space/ToolViewer?slug=crystal-lens-cursor-mr870uvt" }
+    ]
   }
 ];
