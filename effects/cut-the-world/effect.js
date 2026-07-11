@@ -27,7 +27,7 @@ const state = {
   path: [],
   pathFadeStart: 0,
   lastGestureTime: 0,
-  holes: [],
+  holeUnion: [], // 聯集後的洞（MultiPolygon：多邊形→環→[x,y]），重疊的切割會合併
   glows: [],
   fragments: [],
   lastVideoTime: -1,
@@ -62,9 +62,9 @@ function rebuildHoleShadows() {
   // 位移往右下（光源在左上的透視），厚度帶落在洞的左上內緣
   const rimX = rim * 0.7;
   const rimY = rim * 0.7;
-  for (const hole of state.holes) {
+  for (const polygon of state.holeUnion) {
     shadowContext.save();
-    pathOn(shadowContext, hole);
+    pathOnPolygon(shadowContext, polygon);
     shadowContext.clip();
 
     // 1. 牆體斷面：先鋪當下畫面當牆體材質，把同形狀往右下位移擦掉留下厚度帶，再整帶壓暗
@@ -73,24 +73,24 @@ function rebuildHoleShadows() {
     shadowContext.globalCompositeOperation = "destination-out";
     shadowContext.save();
     shadowContext.translate(rimX, rimY);
-    pathOn(shadowContext, hole);
+    pathOnPolygon(shadowContext, polygon);
     shadowContext.fill();
     shadowContext.restore();
     shadowContext.globalCompositeOperation = "source-atop";
-    pathOn(shadowContext, hole);
+    pathOnPolygon(shadowContext, polygon);
     shadowContext.fillStyle = "rgba(25,20,16,0.42)";
     shadowContext.fill();
     // 斷面靠洞內側再疊暗，做出立面轉折
     shadowContext.save();
     shadowContext.translate(rimX * 0.45, rimY * 0.45);
-    pathOn(shadowContext, hole);
+    pathOnPolygon(shadowContext, polygon);
     shadowContext.fillStyle = "rgba(30,25,20,0.4)";
     shadowContext.fill();
     shadowContext.restore();
     shadowContext.globalCompositeOperation = "source-over";
 
     // 2. 四周內陰影（畫在斷面之後才不會被蓋掉，側邊與底部因此有深度）
-    pathOn(shadowContext, hole);
+    pathOnPolygon(shadowContext, polygon);
     shadowContext.strokeStyle = "rgba(0,0,0,0.8)";
     shadowContext.lineWidth = 3;
     shadowContext.shadowColor = "rgba(0,0,0,0.9)";
@@ -99,7 +99,7 @@ function rebuildHoleShadows() {
     shadowContext.shadowBlur = 0;
 
     // 3. 斷面後方的洞內陰影（位移超過厚度帶，暈在斷面底下）
-    pathOn(shadowContext, hole);
+    pathOnPolygon(shadowContext, polygon);
     shadowContext.strokeStyle = "rgba(0,0,0,0.45)";
     shadowContext.lineWidth = 3;
     shadowContext.shadowColor = "rgba(0,0,0,0.85)";
@@ -114,12 +114,12 @@ function rebuildHoleShadows() {
     // 4. 斷面與洞內的硬邊交界線＋洞口外緣受光亮線
     shadowContext.save();
     shadowContext.translate(rimX, rimY);
-    pathOn(shadowContext, hole);
+    pathOnPolygon(shadowContext, polygon);
     shadowContext.strokeStyle = "rgba(30,26,22,0.85)";
     shadowContext.lineWidth = 2;
     shadowContext.stroke();
     shadowContext.restore();
-    pathOn(shadowContext, hole);
+    pathOnPolygon(shadowContext, polygon);
     shadowContext.strokeStyle = "rgba(255,255,255,0.3)";
     shadowContext.lineWidth = 1.5;
     shadowContext.stroke();
@@ -209,7 +209,7 @@ shell.addButton({
   label: "重置世界",
   onClick() {
     for (const fragment of state.fragments) Composite.remove(engine.world, fragment.body);
-    state.holes = [];
+    state.holeUnion = [];
     state.glows = [];
     state.fragments = [];
     state.path = [];
@@ -234,7 +234,14 @@ function resize() {
   const sy = height / oldHeight;
   if (oldWidth > 1 || oldHeight > 1) {
     for (const point of state.path) scalePoint(point, sx, sy);
-    for (const hole of state.holes) for (const point of hole) scalePoint(point, sx, sy);
+    for (const polygon of state.holeUnion) {
+      for (const ring of polygon) {
+        for (const point of ring) {
+          point[0] *= sx;
+          point[1] *= sy;
+        }
+      }
+    }
     for (const glow of state.glows) for (const point of glow.points) scalePoint(point, sx, sy);
     // ponytail: 非等比縮放時剛體與貼圖用平均比例近似，碎片只活幾秒，誤差可接受
     const s = (sx + sy) / 2;
@@ -364,6 +371,16 @@ function pathOn(contextToUse, points) {
   contextToUse.moveTo(points[0].x, points[0].y);
   for (let i = 1; i < points.length; i += 1) contextToUse.lineTo(points[i].x, points[i].y);
   contextToUse.closePath();
+}
+
+// 聯集結果是多環多邊形（外環＋可能的內島），nonzero 填充規則會自動排除內島
+function pathOnPolygon(contextToUse, polygon) {
+  contextToUse.beginPath();
+  for (const ring of polygon) {
+    contextToUse.moveTo(ring[0][0], ring[0][1]);
+    for (let i = 1; i < ring.length; i += 1) contextToUse.lineTo(ring[i][0], ring[i][1]);
+    contextToUse.closePath();
+  }
 }
 
 function drawMirroredVideo(targetContext, width, height) {
@@ -548,7 +565,15 @@ function createFragment(glow, now) {
   snapshotContext.clip();
   snapshotContext.drawImage(baseCanvas, 0, 0);
   snapshotContext.restore();
-  state.holes.push(points);
+  // 重疊的洞聯集成一個大洞，斷面與陰影只會出現在合併後的外輪廓
+  const ring = points.map((point) => [point.x, point.y]);
+  try {
+    state.holeUnion = state.holeUnion.length
+      ? window.polygonClipping.union(state.holeUnion, [ring])
+      : [[ring]];
+  } catch (error) {
+    state.holeUnion.push([ring]); // 聯集失敗時退回獨立洞，只剩重疊處的視覺小瑕疵
+  }
   state.shadowsDirty = true;
   // ponytail: 物理形狀用凸包，接近視覺形狀又免多邊形分解；凹形的凹口處堆疊會些微懸空
   const hull = convexHull(points.map((point) => ({ x: point.x - minX, y: point.y - minY })));
@@ -635,20 +660,20 @@ function updateWorld(now, dt) {
 function drawWorld(now) {
   context.clearRect(0, 0, state.width, state.height);
   context.drawImage(baseCanvas, 0, 0);
-  const needsEffect = state.holes.length || state.glows.length || state.fragments.length;
+  const needsEffect = state.holeUnion.length || state.glows.length || state.fragments.length;
   // ponytail: 特效節流到約 30fps，halftone/matrix 顆粒調到最細時全速跑不動
   if (needsEffect && now - state.lastEffectTime >= 33) {
     renderEffect(now);
     state.lastEffectTime = now;
   }
-  for (const hole of state.holes) {
+  for (const polygon of state.holeUnion) {
     context.save();
-    pathOn(context, hole);
+    pathOnPolygon(context, polygon);
     context.clip();
     context.drawImage(effectCanvas, 0, 0, state.width, state.height);
     context.restore();
   }
-  if (state.holes.length) context.drawImage(shadowCanvas, 0, 0);
+  if (state.holeUnion.length) context.drawImage(shadowCanvas, 0, 0);
   for (const glow of state.glows) {
     const progress = Math.min(1, (now - glow.start) / 1000);
     context.save();
@@ -696,7 +721,7 @@ function drawWorld(now) {
     context.stroke();
     context.restore();
   }
-  if (!state.holes.length && !state.path.length) drawPrompt();
+  if (!state.holeUnion.length && !state.path.length) drawPrompt();
   if (state.fingertip) drawFingertip(now);
 }
 
