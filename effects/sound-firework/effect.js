@@ -2,12 +2,14 @@
   "use strict";
 
   const shell = Shell.init({ id: "sound-firework" });
-  // 兩層畫布：火星層靠半透明覆蓋留拖尾，貓咪層每格清空才不會糊成一團
+  // 三層畫布：夜空只畫一次當底、火星層靠半透明覆蓋留拖尾、貓咪層每格清空才不會糊
+  const skyCanvas = document.createElement("canvas");
+  const skyContext = skyCanvas.getContext("2d");
   const canvas = document.createElement("canvas");
   const context = canvas.getContext("2d");
   const catCanvas = document.createElement("canvas");
   const catContext = catCanvas.getContext("2d");
-  // 染色暫存：貓咪原圖是淺奶油色，疊上煙火顏色後才畫到主畫布
+  // 染色暫存：貓咪原圖是淺奶油色，疊上煙火顏色後才畫到貓咪層
   const tintCanvas = document.createElement("canvas");
   const tintContext = tintCanvas.getContext("2d");
   const meter = document.createElement("div");
@@ -39,23 +41,18 @@
   const display = { width: 1, height: 1, animationId: 0, lastStep: 0 };
   const frames = [];
   const rockets = [];
-  const sparks = [];
-  const stars = [];
+  const strokes = [];
   const pending = [];
   let baseHue = 45;
   let framesReady = false;
 
-  canvas.style.position = "absolute";
-  canvas.style.inset = "0";
-  canvas.style.width = "100%";
-  canvas.style.height = "100%";
-  canvas.style.display = "block";
-
-  catCanvas.style.position = "absolute";
-  catCanvas.style.inset = "0";
-  catCanvas.style.width = "100%";
-  catCanvas.style.height = "100%";
-  catCanvas.style.display = "block";
+  for (const element of [skyCanvas, canvas, catCanvas]) {
+    element.style.position = "absolute";
+    element.style.inset = "0";
+    element.style.width = "100%";
+    element.style.height = "100%";
+    element.style.display = "block";
+  }
 
   meter.style.position = "absolute";
   meter.style.left = "18px";
@@ -65,13 +62,13 @@
   meter.style.border = "1px solid rgba(255, 255, 255, 0.14)";
   meter.style.borderRadius = "8px";
   meter.style.padding = "12px";
-  meter.style.background = "rgba(6, 8, 18, 0.66)";
+  meter.style.background = "rgba(9, 14, 38, 0.66)";
   meter.style.color = "#f3efe6";
   meter.style.font = "14px/1.45 'Noto Sans TC', 'Microsoft JhengHei', sans-serif";
   meter.style.backdropFilter = "blur(14px)";
 
-  shell.container.style.background = "#05060f";
-  shell.container.append(canvas, catCanvas, meter);
+  shell.container.style.background = "#080e26";
+  shell.container.append(skyCanvas, canvas, catCanvas, meter);
 
   shell.addParam({
     type: "range",
@@ -122,6 +119,10 @@
     return a + (b - a) * amount;
   }
 
+  function random(min, max) {
+    return min + Math.random() * (max - min);
+  }
+
   function hexToHue(hex) {
     const value = parseInt(hex.slice(1), 16);
     const r = ((value >> 16) & 255) / 255;
@@ -144,29 +145,70 @@
     return (hue * 60 + 360) % 360;
   }
 
+  // 用粗筆刷把夜空刷出來：深藍底＋大筆觸＋刮痕＋金色顏料點，只畫一次
+  function paintSky() {
+    const w = display.width;
+    const h = display.height;
+    skyContext.setTransform(1, 0, 0, 1, 0, 0);
+    skyContext.fillStyle = "#0a1230";
+    skyContext.fillRect(0, 0, w, h);
+
+    // 方頭筆刷、方向大致一致地反覆疊塗——圓頭粗線會變成一根根膠囊，不像油畫
+    skyContext.lineCap = "butt";
+    const dominant = random(0, Math.PI);
+    for (let i = 0; i < 260; i += 1) {
+      const x = random(-0.05, 1.05) * w;
+      const y = random(-0.05, 1.05) * h;
+      const angle = dominant + random(-0.55, 0.55);
+      const length = random(50, 260);
+      skyContext.strokeStyle = `hsla(${random(212, 252)}, ${random(34, 62)}%, ${random(8, 22)}%, ${random(0.1, 0.3)})`;
+      skyContext.lineWidth = random(9, 34);
+      skyContext.beginPath();
+      skyContext.moveTo(x, y);
+      skyContext.lineTo(x + Math.cos(angle) * length, y + Math.sin(angle) * length);
+      skyContext.stroke();
+    }
+
+    // 乾筆刮痕，讓底不要太勻
+    for (let i = 0; i < 220; i += 1) {
+      const x = Math.random() * w;
+      const y = Math.random() * h;
+      const angle = dominant + random(-0.5, 0.5);
+      const length = random(20, 190);
+      skyContext.strokeStyle = `hsla(${random(200, 250)}, ${random(30, 60)}%, ${random(4, 34)}%, ${random(0.06, 0.22)})`;
+      skyContext.lineWidth = random(1, 4);
+      skyContext.beginPath();
+      skyContext.moveTo(x, y);
+      skyContext.lineTo(x + Math.cos(angle) * length, y + Math.sin(angle) * length);
+      skyContext.stroke();
+    }
+
+    // 金色與白色顏料點，取代規矩的圓形星星
+    const fleckCount = Math.round(w * h / 14000);
+    for (let i = 0; i < fleckCount; i += 1) {
+      const gold = Math.random() < 0.55;
+      skyContext.save();
+      skyContext.translate(Math.random() * w, random(0, 0.92) * h);
+      skyContext.rotate(random(0, Math.PI));
+      skyContext.fillStyle = gold
+        ? `hsla(${random(38, 52)}, ${random(70, 92)}%, ${random(52, 72)}%, ${random(0.3, 0.85)})`
+        : `hsla(${random(196, 216)}, ${random(15, 45)}%, ${random(78, 96)}%, ${random(0.25, 0.7)})`;
+      skyContext.beginPath();
+      skyContext.ellipse(0, 0, random(1, 5.5), random(0.8, 2.2), 0, 0, Math.PI * 2);
+      skyContext.fill();
+      skyContext.restore();
+    }
+  }
+
   function resize() {
     display.width = Math.max(1, shell.container.clientWidth || window.innerWidth);
     display.height = Math.max(1, shell.container.clientHeight || window.innerHeight);
-    canvas.width = Math.floor(display.width);
-    canvas.height = Math.floor(display.height);
-    catCanvas.width = canvas.width;
-    catCanvas.height = canvas.height;
-    context.fillStyle = "#05060f";
-    context.fillRect(0, 0, display.width, display.height);
-    buildStars();
-  }
-
-  function buildStars() {
-    stars.length = 0;
-    const count = Math.round(display.width * display.height / 26000);
-    for (let i = 0; i < count; i += 1) {
-      stars.push({
-        x: Math.random() * display.width,
-        y: Math.random() * display.height * 0.85,
-        r: Math.random() * 1.1 + 0.3,
-        a: Math.random() * 0.5 + 0.15
-      });
+    for (const element of [skyCanvas, canvas, catCanvas]) {
+      element.width = Math.floor(display.width);
+      element.height = Math.floor(display.height);
     }
+    paintSky();
+    context.clearRect(0, 0, display.width, display.height);
   }
 
   function loadFrames() {
@@ -188,35 +230,76 @@
   }
 
   function launch(power, brightness) {
-    const hue = (baseHue + (Math.random() - 0.5) * 50 + 360) % 360;
+    const hue = (baseHue + random(-12, 12) + 360) % 360;
     const base = Math.min(display.width, display.height) * 0.16 * state.size;
     rockets.push({
-      x: display.width * (0.15 + Math.random() * 0.7),
-      drift: (Math.random() - 0.5) * display.width * 0.06,
+      x: display.width * random(0.15, 0.85),
+      drift: random(-0.03, 0.03) * display.width,
       apexY: display.height * lerp(0.52, 0.14, brightness),
       elapsed: 0,
       base: base * lerp(0.8, 1.25, power),
       power,
       hue,
-      spin: (Math.random() - 0.5) * 0.24
+      fade: 0,
+      spin: random(-0.12, 0.12)
     });
   }
 
-  function burst(rocket, x, y, scale) {
-    const count = Math.round(lerp(26, 64, rocket.power) * clamp(state.size, 0.6, 1.6));
-    for (let i = 0; i < count; i += 1) {
-      const angle = Math.random() * Math.PI * 2;
-      const speed = (Math.random() * 0.7 + 0.35) * scale * 26;
-      sparks.push({
-        x,
-        y,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed - scale * 4,
-        life: 1,
-        decay: 0.045 + Math.random() * 0.05,
-        r: (Math.random() * 3 + 2) * clamp(state.size, 0.6, 1.6),
-        hue: (rocket.hue + (Math.random() - 0.5) * 40 + 360) % 360
-      });
+  // 一筆顏料：streak 是往外拉的長筆觸，dab 是甩出去的顏料點
+  function addStroke(options) {
+    strokes.push({
+      x: options.x,
+      y: options.y,
+      vx: options.vx,
+      vy: options.vy,
+      life: 1,
+      decay: options.decay,
+      hue: options.hue,
+      dab: options.dab === true,
+      width: options.width,
+      // 每筆記三根鬃毛的偏移，畫出乾筆分岔
+      bristles: [
+        { offset: random(-1.6, 1.6), scale: random(0.7, 1), alpha: random(0.55, 1) },
+        { offset: random(-3.2, 3.2), scale: random(0.4, 0.85), alpha: random(0.25, 0.7) },
+        { offset: random(-4.5, 4.5), scale: random(0.25, 0.6), alpha: random(0.15, 0.45) }
+      ]
+    });
+  }
+
+  function burst(rocket, x, y) {
+    const scale = Math.min(display.width, display.height) * 0.038 * state.size;
+    const rays = Math.round(lerp(11, 22, rocket.power));
+    for (let i = 0; i < rays; i += 1) {
+      const angle = (i / rays) * Math.PI * 2 + random(-0.14, 0.14);
+      // 同一道放射線上疊兩三筆長短不一的筆觸，看起來才像手繪的一撇
+      const bunch = 2 + (Math.random() < 0.5 ? 1 : 0);
+      for (let j = 0; j < bunch; j += 1) {
+        const speed = scale * random(0.5, 1.25);
+        const spread = random(-0.09, 0.09);
+        addStroke({
+          x: x + random(-6, 6),
+          y: y + random(-6, 6),
+          vx: Math.cos(angle + spread) * speed,
+          vy: Math.sin(angle + spread) * speed,
+          decay: random(0.05, 0.1),
+          hue: (rocket.hue + random(-10, 10) + 360) % 360,
+          width: random(2, 6) * clamp(state.size, 0.6, 1.6)
+        });
+      }
+      // 撇尾甩出去的顏料點
+      if (Math.random() < 0.55) {
+        const speed = scale * random(1.1, 1.7);
+        addStroke({
+          x,
+          y,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          decay: random(0.03, 0.06),
+          hue: (rocket.hue + random(-14, 14) + 360) % 360,
+          dab: true,
+          width: random(2.5, 6) * clamp(state.size, 0.6, 1.6)
+        });
+      }
     }
   }
 
@@ -228,43 +311,83 @@
 
     for (let i = rockets.length - 1; i >= 0; i -= 1) {
       const rocket = rockets[i];
+      // 綻放後貓咪不是瞬間消失，再留三格淡出
+      if (rocket.fade > 0) {
+        rocket.fade -= 1;
+        if (rocket.fade === 0) {
+          rockets.splice(i, 1);
+        }
+        continue;
+      }
       rocket.elapsed += STEP_MS;
       const progress = rocket.elapsed / RISE_MS;
       if (progress >= 1) {
-        const scale = state.size;
-        burst(rocket, rocket.x + rocket.drift, rocket.apexY, scale);
-        rockets.splice(i, 1);
+        burst(rocket, rocket.x + rocket.drift, rocket.apexY);
+        rocket.fade = 3;
         continue;
       }
-      // 上升時每格灑一點火星尾巴
-      if (Math.random() < 0.7) {
+      // 上升時每格滴幾筆尾巴
+      if (Math.random() < 0.8) {
         const eased = 1 - Math.pow(1 - progress, 2.1);
         const y = lerp(display.height + rocket.base * 0.6, rocket.apexY, eased);
-        sparks.push({
-          x: rocket.x + rocket.drift * eased + (Math.random() - 0.5) * rocket.base * 0.4,
-          y: y + rocket.base * 0.35,
-          vx: (Math.random() - 0.5) * 3,
-          vy: Math.random() * 4 + 1,
-          life: 0.7,
-          decay: 0.09,
-          r: Math.random() * 2 + 1.2,
-          hue: rocket.hue
+        addStroke({
+          x: rocket.x + rocket.drift * eased + random(-0.25, 0.25) * rocket.base,
+          y: y + rocket.base * 0.4,
+          vx: random(-1.5, 1.5),
+          vy: random(2, 7),
+          decay: random(0.1, 0.18),
+          hue: rocket.hue,
+          width: random(1.5, 4)
         });
       }
     }
 
-    for (let i = sparks.length - 1; i >= 0; i -= 1) {
-      const spark = sparks[i];
-      spark.x += spark.vx;
-      spark.y += spark.vy;
-      spark.vy += 1.5;
-      spark.vx *= 0.96;
-      spark.vy *= 0.96;
-      spark.life -= spark.decay;
-      if (spark.life <= 0 || spark.y > display.height + 40) {
-        sparks.splice(i, 1);
+    for (let i = strokes.length - 1; i >= 0; i -= 1) {
+      const stroke = strokes[i];
+      stroke.x += stroke.vx;
+      stroke.y += stroke.vy;
+      stroke.vy += 1.6;
+      stroke.vx *= 0.9;
+      stroke.vy *= 0.9;
+      stroke.life -= stroke.decay;
+      if (stroke.life <= 0 || stroke.y > display.height + 60) {
+        strokes.splice(i, 1);
       }
     }
+  }
+
+  function drawStroke(stroke) {
+    const life = clamp(stroke.life, 0, 1);
+    const speed = Math.hypot(stroke.vx, stroke.vy);
+    const angle = Math.atan2(stroke.vy, stroke.vx);
+    // 越亮越靠近爆心：接近白熱，尾端才回到煙火色
+    const light = lerp(64, 99, Math.pow(life, 1.6));
+    const saturation = lerp(88, 28, Math.pow(life, 2.4));
+
+    context.save();
+    context.translate(stroke.x, stroke.y);
+    context.rotate(angle);
+
+    if (stroke.dab) {
+      context.fillStyle = `hsla(${stroke.hue}, ${saturation}%, ${light}%, ${life * 0.9})`;
+      context.beginPath();
+      context.ellipse(0, 0, stroke.width * lerp(1.6, 0.9, life), stroke.width * 0.55, 0, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+      return;
+    }
+
+    const length = Math.min(speed * 2.6, 120);
+    context.lineCap = "round";
+    for (const bristle of stroke.bristles) {
+      context.strokeStyle = `hsla(${stroke.hue}, ${saturation}%, ${light}%, ${life * bristle.alpha})`;
+      context.lineWidth = stroke.width * bristle.scale;
+      context.beginPath();
+      context.moveTo(0, bristle.offset * 0.4);
+      context.lineTo(-length * bristle.scale, bristle.offset);
+      context.stroke();
+    }
+    context.restore();
   }
 
   function drawCat(rocket) {
@@ -286,45 +409,31 @@
     tintContext.clearRect(0, 0, side, side);
     tintContext.drawImage(image, 0, 0, side, side);
     tintContext.globalCompositeOperation = "source-atop";
-    tintContext.fillStyle = `hsl(${rocket.hue}, 85%, 62%)`;
-    tintContext.globalAlpha = 0.5;
+    tintContext.fillStyle = `hsl(${rocket.hue}, 80%, 64%)`;
+    tintContext.globalAlpha = 0.38;
     tintContext.fillRect(0, 0, side, side);
     tintContext.globalAlpha = 1;
     tintContext.globalCompositeOperation = "source-over";
 
     catContext.save();
+    catContext.globalAlpha = rocket.fade > 0 ? rocket.fade / 3 : 1;
     catContext.translate(x, y);
     catContext.rotate(rocket.spin * (1 - eased));
-    catContext.shadowColor = `hsla(${rocket.hue}, 90%, 65%, 0.9)`;
-    catContext.shadowBlur = size * 0.35;
+    catContext.shadowColor = `hsla(${rocket.hue}, 85%, 62%, 0.55)`;
+    catContext.shadowBlur = size * 0.16;
     catContext.drawImage(tintCanvas, -side / 2, -side / 2, side, side);
     catContext.restore();
   }
 
   function draw() {
-    // 半透明黑底取代 clear，讓火星自然留下拖尾
-    context.fillStyle = "rgba(5, 6, 15, 0.34)";
-    context.fillRect(0, 0, display.width, display.height);
+    // 用夜空本身淡回去，殘筆會慢慢化進背景而不是壓成一片死黑
+    context.globalAlpha = 0.24;
+    context.drawImage(skyCanvas, 0, 0);
+    context.globalAlpha = 1;
 
-    context.globalCompositeOperation = "lighter";
-    for (const star of stars) {
-      context.fillStyle = `rgba(255, 250, 235, ${star.a})`;
-      context.beginPath();
-      context.arc(star.x, star.y, star.r, 0, Math.PI * 2);
-      context.fill();
+    for (const stroke of strokes) {
+      drawStroke(stroke);
     }
-
-    for (const spark of sparks) {
-      const alpha = clamp(spark.life, 0, 1);
-      const gradient = context.createRadialGradient(spark.x, spark.y, 0, spark.x, spark.y, spark.r * 3);
-      gradient.addColorStop(0, `hsla(${spark.hue}, 95%, 78%, ${alpha})`);
-      gradient.addColorStop(1, `hsla(${spark.hue}, 95%, 55%, 0)`);
-      context.fillStyle = gradient;
-      context.beginPath();
-      context.arc(spark.x, spark.y, spark.r * 3, 0, Math.PI * 2);
-      context.fill();
-    }
-    context.globalCompositeOperation = "source-over";
 
     catContext.clearRect(0, 0, display.width, display.height);
     for (const rocket of rockets) {
