@@ -9,11 +9,10 @@
   const context = canvas.getContext("2d");
   const catCanvas = document.createElement("canvas");
   const catContext = catCanvas.getContext("2d");
-  // 染色暫存：貓咪原圖是淺奶油色，疊上煙火顏色後才畫到貓咪層
-  const tintCanvas = document.createElement("canvas");
-  const tintContext = tintCanvas.getContext("2d");
   const meter = document.createElement("div");
 
+  // 四隻寫實貓，各有一套 6 格連續動作；發射時隨機抽一隻
+  const CAT_SETS = ["tabby", "tuxedo", "ragdoll", "siamese"];
   const FRAME_COUNT = 6;
   const STEP_MS = 1000 / 12; // 逐格動畫：整套模擬固定跑 12 fps，刻意保留頓挫感
   const RISE_MS = 1150;
@@ -39,7 +38,7 @@
   };
 
   const display = { width: 1, height: 1, animationId: 0, lastStep: 0 };
-  const frames = [];
+  const frames = {}; // { tabby: [Image × 6], ... }
   const rockets = [];
   const strokes = [];
   const pending = [];
@@ -212,20 +211,24 @@
   }
 
   function loadFrames() {
+    const total = CAT_SETS.length * FRAME_COUNT;
     let loaded = 0;
-    for (let i = 0; i < FRAME_COUNT; i += 1) {
-      const image = new Image();
-      image.onload = () => {
-        loaded += 1;
-        if (loaded === FRAME_COUNT) {
-          framesReady = true;
-        }
-      };
-      image.onerror = () => {
-        shell.showError("貓咪序列圖載入失敗，請確認 frames/ 資料夾內的圖檔完整");
-      };
-      image.src = `frames/cat-0${i + 1}.png`;
-      frames.push(image);
+    for (const name of CAT_SETS) {
+      frames[name] = [];
+      for (let i = 0; i < FRAME_COUNT; i += 1) {
+        const image = new Image();
+        image.onload = () => {
+          loaded += 1;
+          if (loaded === total) {
+            framesReady = true;
+          }
+        };
+        image.onerror = () => {
+          shell.showError("貓咪序列圖載入失敗，請確認 frames/ 資料夾內的圖檔完整");
+        };
+        image.src = `frames/${name}-0${i + 1}.webp`;
+        frames[name].push(image);
+      }
     }
   }
 
@@ -240,6 +243,7 @@
       base: base * lerp(0.8, 1.25, power),
       power,
       hue,
+      cat: CAT_SETS[Math.floor(Math.random() * CAT_SETS.length)],
       fade: 0,
       spin: random(-0.12, 0.12)
     });
@@ -394,7 +398,8 @@
     const progress = clamp(rocket.elapsed / RISE_MS, 0, 1);
     const eased = 1 - Math.pow(1 - progress, 2.1);
     const frameIndex = Math.min(FRAME_COUNT - 1, Math.floor(progress * FRAME_COUNT));
-    const image = frames[frameIndex];
+    const set = frames[rocket.cat];
+    const image = set && set[frameIndex];
     if (!image || !image.complete || !image.naturalWidth) {
       return;
     }
@@ -402,26 +407,16 @@
     const size = rocket.base * lerp(0.4, 1, eased);
     const x = rocket.x + rocket.drift * eased;
     const y = lerp(display.height + size * 0.6, rocket.apexY, eased);
-
     const side = Math.max(2, Math.round(size));
-    tintCanvas.width = side;
-    tintCanvas.height = side;
-    tintContext.clearRect(0, 0, side, side);
-    tintContext.drawImage(image, 0, 0, side, side);
-    tintContext.globalCompositeOperation = "source-atop";
-    tintContext.fillStyle = `hsl(${rocket.hue}, 80%, 64%)`;
-    tintContext.globalAlpha = 0.38;
-    tintContext.fillRect(0, 0, side, side);
-    tintContext.globalAlpha = 1;
-    tintContext.globalCompositeOperation = "source-over";
 
+    // 不染色，寫實毛色要看得出品種；只靠煙火色的外暈把貓咪接回畫面
     catContext.save();
     catContext.globalAlpha = rocket.fade > 0 ? rocket.fade / 3 : 1;
     catContext.translate(x, y);
     catContext.rotate(rocket.spin * (1 - eased));
-    catContext.shadowColor = `hsla(${rocket.hue}, 85%, 62%, 0.55)`;
-    catContext.shadowBlur = size * 0.16;
-    catContext.drawImage(tintCanvas, -side / 2, -side / 2, side, side);
+    catContext.shadowColor = `hsla(${rocket.hue}, 85%, 62%, 0.8)`;
+    catContext.shadowBlur = size * 0.26;
+    catContext.drawImage(image, -side / 2, -side / 2, side, side);
     catContext.restore();
   }
 
