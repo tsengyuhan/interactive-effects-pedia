@@ -33,8 +33,12 @@
   const TEAR_TMP = 512; // 合成用畫布邊長
   const SHARD_GRID = 56; // 剪影取樣格數：夠細才散得成點狀雲而不是一塊塊馬賽克
   const SHARD_HOLD = 1; // 剪影只定格一格：看得出是貓就好，多一格就變成暫停
+  const RIM_BINS = 96; // 量貓頭輪廓半徑用的角度格數
+  const RIM_SCALE = 1.55; // 輪廓放大倍率：剪影炸開後粒子圍成的貓頭要比原本大
+  const RIM_STEPS = 3; // 從剪影聚到輪廓花幾格
   const STEP_MS = 1000 / 12; // 逐格動畫：整套模擬固定跑 12 fps，刻意保留頓挫感
   const RISE_MS = 520; // 往上衝的爆發感，慢了就沒有煙火的勁
+  const PAPER_RISE_MS = 330; // 鉛筆線更短更急，才有一筆劃上去的力道
   const errorMessage = "請允許麥克風權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
 
   const audio = {
@@ -200,37 +204,35 @@
   }
 
   function loadFrames() {
-    const total = CAT_SETS.length * FRAME_COUNT + TEAR_SETS.length * TEAR_FRAMES * 2;
+    // 貓咪序列圖沒到就整個跑不動，所以只有它會擋住開始並跳錯誤
+    const total = CAT_SETS.length * FRAME_COUNT;
     let loaded = 0;
-    const track = (image, src) => {
-      image.onload = () => {
-        loaded += 1;
-        if (loaded === total) {
-          framesReady = true;
-        }
-      };
-      image.onerror = () => {
-        shell.showError("序列圖載入失敗，請確認 frames/ 資料夾內的圖檔完整");
-      };
-      image.src = src;
-    };
-
     for (const name of CAT_SETS) {
       frames[name] = [];
       for (let i = 0; i < FRAME_COUNT; i += 1) {
         const image = new Image();
-        track(image, `frames/${name}-0${i + 1}.webp`);
+        image.onload = () => {
+          loaded += 1;
+          if (loaded === total) {
+            framesReady = true;
+          }
+        };
+        image.onerror = () => {
+          shell.showError("貓咪序列圖載入失敗，請確認 frames/ 資料夾內的圖檔完整");
+        };
+        image.src = `frames/${name}-0${i + 1}.webp`;
         frames[name].push(image);
       }
     }
 
+    // 撕紙序列圖只有紙張風格會用到，載不到就那一組不畫，不該把整個效果拖垮
     for (const name of TEAR_SETS) {
       tears[name] = [];
       for (let i = 0; i < TEAR_FRAMES; i += 1) {
         const image = new Image();
         const mask = new Image();
-        track(image, `frames/tear-${name}-0${i + 1}.webp`);
-        track(mask, `frames/tear-${name}-0${i + 1}-m.webp`);
+        image.src = `frames/tear-${name}-0${i + 1}.webp`;
+        mask.src = `frames/tear-${name}-0${i + 1}-m.webp`;
         tears[name].push({ image, mask });
       }
     }
@@ -242,14 +244,15 @@
     rockets.push({
       x: display.width * random(0.15, 0.85),
       drift: random(-0.03, 0.03) * display.width,
-      // 下限留 0.22，洞連同翻起來的紙片才不會被畫面上緣切掉
-      apexY: display.height * lerp(0.55, 0.22, brightness),
+      // 下限留 0.3，破口變大之後連同紙片才不會被畫面上緣切掉
+      apexY: display.height * lerp(0.6, 0.3, brightness),
       elapsed: 0,
       // 小聲跟大聲差到 4 倍以上，音量大小才一眼看得出來
       base: base * lerp(0.42, 1.85, Math.pow(power, 0.8)),
       power,
       hue,
       style: state.style,
+      riseMs: state.style === "paper" ? PAPER_RISE_MS : RISE_MS,
       cat: CAT_SETS[Math.floor(Math.random() * CAT_SETS.length)],
       last: null, // 紙張風格用：上一格的鉛筆落點
       fade: 0,
@@ -257,12 +260,9 @@
     });
   }
 
-  // 粒子共用一個陣列，kind 決定物理與畫法：
-  // brush 乾筆長筆觸／dab 甩出去的顏料點／shard 貓咪剪影碎片
+  // 現在只剩貓咪的剪影碎片一種粒子；乾筆與顏料點隨著煙火線條一起拿掉了
   function addStroke(options) {
-    const kind = options.kind || (options.dab ? "dab" : "brush");
     strokes.push({
-      kind,
       x: options.x,
       y: options.y,
       vx: options.vx,
@@ -274,19 +274,18 @@
       color: options.color,
       hold: options.hold || 0,
       height: options.height,
-      // 乾筆才需要記三根鬃毛的偏移，畫出分岔
-      bristles: kind === "brush"
-        ? [
-            { offset: random(-1.6, 1.6), scale: random(0.7, 1), alpha: random(0.55, 1) },
-            { offset: random(-3.2, 3.2), scale: random(0.4, 0.85), alpha: random(0.25, 0.7) },
-            { offset: random(-4.5, 4.5), scale: random(0.25, 0.6), alpha: random(0.15, 0.45) }
-          ]
-        : null
+      // 剪影 → 輪廓那一段：從原位聚到輪廓上，聚攏期間不衰減也不受重力
+      gather: options.gather || 0,
+      gatherTotal: options.gather || 0,
+      ox: options.x,
+      oy: options.y,
+      rimX: options.rimX,
+      rimY: options.rimY
     });
   }
 
   // 把貓咪影格縮到 SHARD_GRID 解析度，一個不透明像素換一顆帶原色的碎片。
-  // 碎片先定格成整面剪影（還看得出五官明暗），hold 結束才向外散開。
+  // 三段：定格成整面剪影 → 全部聚到放大的貓頭輪廓上 → 才向外散開。
   function shatter(rocket, x, y) {
     const set = frames[rocket.cat];
     const image = set && set[FRAME_COUNT - 1];
@@ -299,6 +298,28 @@
     samplerContext.drawImage(image, 0, 0, SHARD_GRID, SHARD_GRID);
     const data = samplerContext.getImageData(0, 0, SHARD_GRID, SHARD_GRID).data;
 
+    // 先量出每個角度上貓頭最外緣的半徑，這條輪廓就是粒子聚攏的目標
+    const rim = new Float32Array(RIM_BINS);
+    for (let gy = 0; gy < SHARD_GRID; gy += 1) {
+      for (let gx = 0; gx < SHARD_GRID; gx += 1) {
+        if (data[(gy * SHARD_GRID + gx) * 4 + 3] < 90) {
+          continue;
+        }
+        const ux = gx + 0.5 - SHARD_GRID / 2;
+        const uy = gy + 0.5 - SHARD_GRID / 2;
+        const bin = Math.floor(((Math.atan2(uy, ux) + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * RIM_BINS);
+        rim[bin] = Math.max(rim[bin], Math.hypot(ux, uy));
+      }
+    }
+    // 只跟左右鄰居取平均，補掉零星的空角度。取最大值會把耳朵旁邊的凹陷一起抬平，
+    // 輪廓就變成一個橢圓、看不出是貓頭了
+    const smooth = new Float32Array(RIM_BINS);
+    for (let i = 0; i < RIM_BINS; i += 1) {
+      const prev = rim[(i - 1 + RIM_BINS) % RIM_BINS];
+      const next = rim[(i + 1) % RIM_BINS];
+      smooth[i] = rim[i] > 0 ? (prev + rim[i] * 2 + next) / 4 : (prev + next) / 2;
+    }
+
     const size = rocket.base;
     const cell = size / SHARD_GRID;
     const speed = Math.min(display.width, display.height) * 0.03 * state.size;
@@ -308,16 +329,22 @@
         if (data[i + 3] < 90) {
           continue;
         }
-        const px = x + (gx + 0.5 - SHARD_GRID / 2) * cell;
-        const py = y + (gy + 0.5 - SHARD_GRID / 2) * cell;
-        const angle = Math.atan2(py - y, px - x) + random(-0.25, 0.25);
-        // 離中心越遠飛越快，散開時才保得住貓頭的形
-        const reach = Math.hypot(px - x, py - y) / (size * 0.5);
-        const push = speed * lerp(0.6, 2.6, clamp(reach, 0, 1)) * random(0.75, 1.35);
+        const ux = gx + 0.5 - SHARD_GRID / 2;
+        const uy = gy + 0.5 - SHARD_GRID / 2;
+        const px = x + ux * cell;
+        const py = y + uy * cell;
+        const theta = Math.atan2(uy, ux);
+        const bin = Math.floor(((theta + Math.PI * 2) % (Math.PI * 2)) / (Math.PI * 2) * RIM_BINS);
+        // 輪廓上帶一點厚度，不然幾千顆粒子會擠成一條死板的細線
+        const rimRadius = smooth[bin] * cell * RIM_SCALE * random(0.93, 1.08);
+        const angle = theta + random(-0.16, 0.16);
+        const push = speed * random(1.1, 2.1);
         addStroke({
-          kind: "shard",
           x: px,
           y: py,
+          rimX: x + Math.cos(theta) * rimRadius,
+          rimY: y + Math.sin(theta) * rimRadius,
+          gather: RIM_STEPS,
           vx: Math.cos(angle) * push,
           vy: Math.sin(angle) * push - speed * 0.3,
           // 撐久一點：粒子數量不變、只是越散越開，才看得到密集炸成稀疏的過程
@@ -327,44 +354,6 @@
           width: cell * random(0.9, 1.5),
           height: cell * 1.06, // 定格畫滿格再多一點，格子間才不會留黑縫
           color: `${data[i]}, ${data[i + 1]}, ${data[i + 2]}`
-        });
-      }
-    }
-  }
-
-  function burst(rocket, x, y) {
-    const scale = Math.min(display.width, display.height) * 0.055 * state.size;
-    // 收尾的煙火線條，數量不多但要拉得夠開才看得到
-    const rays = Math.round(lerp(9, 16, rocket.power));
-    for (let i = 0; i < rays; i += 1) {
-      const angle = (i / rays) * Math.PI * 2 + random(-0.14, 0.14);
-      // 同一道放射線上疊兩三筆長短不一的筆觸，看起來才像手繪的一撇
-      const bunch = 2 + (Math.random() < 0.5 ? 1 : 0);
-      for (let j = 0; j < bunch; j += 1) {
-        const speed = scale * random(0.5, 1.25);
-        const spread = random(-0.09, 0.09);
-        addStroke({
-          x: x + random(-6, 6),
-          y: y + random(-6, 6),
-          vx: Math.cos(angle + spread) * speed,
-          vy: Math.sin(angle + spread) * speed,
-          decay: random(0.05, 0.1),
-          hue: (rocket.hue + random(-10, 10) + 360) % 360,
-          width: random(2, 6) * clamp(state.size, 0.6, 1.6)
-        });
-      }
-      // 撇尾甩出去的顏料點
-      if (Math.random() < 0.55) {
-        const speed = scale * random(1.1, 1.7);
-        addStroke({
-          x,
-          y,
-          vx: Math.cos(angle) * speed,
-          vy: Math.sin(angle) * speed,
-          decay: random(0.03, 0.06),
-          hue: (rocket.hue + random(-14, 14) + 360) % 360,
-          dab: true,
-          width: random(2.5, 6) * clamp(state.size, 0.6, 1.6)
         });
       }
     }
@@ -380,24 +369,20 @@
       const rocket = rockets[i];
       if (rocket.fade > 0) {
         rocket.fade -= 1;
-        // 等粒子散開幾格之後才放放射乾筆，順序才是「貓 → 粒子 → 炸開 → 煙火線條」
-        if (rocket.fade === 3 && rocket.style !== "paper") {
-          burst(rocket, rocket.x + rocket.drift, rocket.apexY);
-        }
         if (rocket.fade === 0) {
           rockets.splice(i, 1);
         }
         continue;
       }
       rocket.elapsed += STEP_MS;
-      const progress = rocket.elapsed / RISE_MS;
+      const progress = rocket.elapsed / rocket.riseMs;
       if (progress >= 1) {
         if (rocket.style === "paper") {
           punchHole(rocket, rocket.x + rocket.drift, rocket.apexY);
           rockets.splice(i, 1);
         } else {
           shatter(rocket, rocket.x + rocket.drift, rocket.apexY);
-          rocket.fade = SHARD_HOLD + 6;
+          rockets.splice(i, 1);
         }
         continue;
       }
@@ -411,26 +396,21 @@
           y: lerp(display.height + rocket.base * 0.2, rocket.apexY, eased) + random(-1.5, 1.5)
         };
         if (rocket.last) {
-          inkPencil(rocket.last, point, rocket.hue);
+          // 越往上筆壓越輕，收出筆鋒，才有一筆用力劃上去的感覺
+          inkPencil(rocket.last, point, rocket.hue, lerp(1.35, 0.45, progress));
         }
         rocket.last = point;
         continue;
       }
-      // 上升時每格滴幾筆尾巴
-      if (Math.random() < 0.8) {
-        const eased = rise(progress);
-        const y = lerp(display.height + rocket.base * 0.6, rocket.apexY, eased);
-        const tailX = rocket.x + rocket.drift * eased + random(-0.25, 0.25) * rocket.base;
-        addStroke({
-          x: tailX,
-          y: y + rocket.base * 0.4,
-          vx: random(-1.5, 1.5),
-          vy: random(2, 7),
-          decay: random(0.1, 0.18),
-          hue: rocket.hue,
-          width: random(1.5, 4)
-        });
-      }
+      // 上升的尾巴：記下這一格走過的線段，draw() 再接起來畫成連續的一道，
+      // 每格灑幾筆散點會斷成一節一節的
+      const eased = rise(progress);
+      const point = {
+        x: rocket.x + rocket.drift * eased,
+        y: lerp(display.height + rocket.base * 0.6, rocket.apexY, eased) + rocket.base * 0.34
+      };
+      rocket.tailFrom = rocket.last;
+      rocket.last = point;
     }
 
     for (let i = holes.length - 1; i >= 0; i -= 1) {
@@ -456,11 +436,21 @@
         stroke.hold -= 1;
         continue;
       }
+      if (stroke.gather > 0) {
+        // 剪影炸開放大：所有粒子往自己那個角度的輪廓上跑，聚成一個放大的貓頭形狀。
+        // 這段不衰減也不吃重力，形狀才撐得住
+        stroke.gather -= 1;
+        const t = 1 - stroke.gather / stroke.gatherTotal;
+        const eased = t * t * (3 - 2 * t);
+        stroke.x = lerp(stroke.ox, stroke.rimX, eased);
+        stroke.y = lerp(stroke.oy, stroke.rimY, eased);
+        continue;
+      }
       stroke.x += stroke.vx;
       stroke.y += stroke.vy;
-      stroke.vy += stroke.kind === "shard" ? 0.7 : 1.6;
-      stroke.vx *= stroke.kind === "shard" ? 0.94 : 0.9;
-      stroke.vy *= stroke.kind === "shard" ? 0.94 : 0.9;
+      stroke.vy += 0.7;
+      stroke.vx *= 0.94;
+      stroke.vy *= 0.94;
       stroke.life -= stroke.decay;
       if (stroke.life <= 0 || stroke.y > display.height + 60) {
         strokes.splice(i, 1);
@@ -471,58 +461,22 @@
   function drawStroke(stroke) {
     const life = clamp(stroke.life, 0, 1);
 
-    // 剪影碎片：保留取樣到的原始毛色。定格時是方塊才拼得成完整剪影，
-    // 一散開就改畫圓點並縮小，馬上從「馬賽克的貓」變成「一團火花」
-    if (stroke.kind === "shard") {
-      const radius = stroke.width * lerp(0.26, 0.7, life);
-      if (stroke.hold > 0) {
-        const cell = stroke.height;
-        context.fillStyle = `rgb(${stroke.color})`;
-        context.fillRect(stroke.x - cell / 2, stroke.y - cell / 2, cell, cell);
-        return;
-      }
-      // 大半輩子維持滿亮度、最後才快速淡掉，粒子數量看起來才是不變的
-      context.globalCompositeOperation = "lighter";
-      context.fillStyle = `rgba(${stroke.color}, ${Math.min(1, life * 2.6) * 0.92})`;
-      context.beginPath();
-      context.arc(stroke.x, stroke.y, radius, 0, Math.PI * 2);
-      context.fill();
-      context.globalCompositeOperation = "source-over";
+    // 保留取樣到的原始毛色。定格時是方塊才拼得成完整剪影，
+    // 一開始聚攏就改畫圓點並縮小，從「馬賽克的貓」變成一圈火花
+    if (stroke.hold > 0) {
+      const cell = stroke.height;
+      context.fillStyle = `rgb(${stroke.color})`;
+      context.fillRect(stroke.x - cell / 2, stroke.y - cell / 2, cell, cell);
       return;
     }
-
-    const speed = Math.hypot(stroke.vx, stroke.vy);
-    const angle = Math.atan2(stroke.vy, stroke.vx);
-    // 越亮越靠近爆心：接近白熱，尾端才回到煙火色
-    const light = lerp(64, 99, Math.pow(life, 1.6));
-    const saturation = lerp(88, 28, Math.pow(life, 2.4));
-
-    context.save();
-    context.translate(stroke.x, stroke.y);
-    context.rotate(angle);
-
-    if (stroke.kind === "dab") {
-      context.fillStyle = `hsla(${stroke.hue}, ${saturation}%, ${light}%, ${life * 0.9})`;
-      context.beginPath();
-      context.ellipse(0, 0, stroke.width * lerp(1.6, 0.9, life), stroke.width * 0.55, 0, 0, Math.PI * 2);
-      context.fill();
-      context.restore();
-      return;
-    }
-
-    const length = Math.min(speed * 2.6, 120);
-    context.lineCap = "round";
-    for (const bristle of stroke.bristles) {
-      context.strokeStyle = `hsla(${stroke.hue}, ${saturation}%, ${light}%, ${life * bristle.alpha})`;
-      context.lineWidth = stroke.width * bristle.scale;
-      context.beginPath();
-      context.moveTo(0, bristle.offset * 0.4);
-      context.lineTo(-length * bristle.scale, bristle.offset);
-      context.stroke();
-    }
-    context.restore();
+    // 大半輩子維持滿亮度、最後才快速淡掉，粒子數量看起來才是不變的
+    context.globalCompositeOperation = "lighter";
+    context.fillStyle = `rgba(${stroke.color}, ${Math.min(1, life * 2.6) * 0.92})`;
+    context.beginPath();
+    context.arc(stroke.x, stroke.y, stroke.width * lerp(0.26, 0.7, life), 0, Math.PI * 2);
+    context.fill();
+    context.globalCompositeOperation = "source-over";
   }
-
 
   // ── 紙張破裂煙火 ───────────────────────────────────────────────
 
@@ -637,7 +591,7 @@
     holes.push({
       x,
       y,
-      size: rocket.base * 1.6, // 貼片邊長；破口約佔貼片的七成
+      size: rocket.base * 2.2, // 貼片邊長；破口約佔貼片的七成
       set: TEAR_SETS[Math.floor(Math.random() * TEAR_SETS.length)],
       t: 0
     });
@@ -693,7 +647,7 @@
 
   // 鉛筆筆跡：沿路徑密集撒碳粉顆粒，中間密邊緣稀。
   // 直接畫進鉛筆層並且只畫新的那一段，既不會每格重算而抖動，也不用重畫整條線
-  function inkPencil(from, to, hue) {
+  function inkPencil(from, to, hue, pressure) {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const length = Math.hypot(dx, dy);
@@ -707,8 +661,9 @@
       const cy = from.y + dy * t;
       for (let j = 0; j < 11; j += 1) {
         // 用兩個亂數相加逼近常態分布，顆粒才會集中在筆芯中央
-        const spread = (Math.random() + Math.random() - 1) * 5.5;
-        const fade = 1 - Math.abs(spread) / 5.5;
+        const reach = 5.5 * pressure;
+        const spread = (Math.random() + Math.random() - 1) * reach;
+        const fade = 1 - Math.abs(spread) / reach;
         pencilContext.fillStyle = `rgba(46, 44, 42, ${0.16 + fade * 0.5})`;
         pencilContext.fillRect(cx + nx * spread, cy + ny * spread, 1, 1);
       }
@@ -730,7 +685,7 @@
   }
 
   function drawCat(rocket) {
-    const progress = clamp(rocket.elapsed / RISE_MS, 0, 1);
+    const progress = clamp(rocket.elapsed / rocket.riseMs, 0, 1);
     const eased = rise(progress);
     const frameIndex = Math.min(FRAME_COUNT - 1, Math.floor(progress * FRAME_COUNT));
     const set = frames[rocket.cat];
@@ -770,6 +725,27 @@
     for (const stroke of strokes) {
       drawStroke(stroke);
     }
+
+    // 尾巴只畫這一格新增的線段，舊的靠拖尾自己淡掉，接起來就是連續的一道
+    context.save();
+    context.lineCap = "round";
+    context.globalCompositeOperation = "lighter";
+    for (const rocket of rockets) {
+      if (!rocket.tailFrom || !rocket.last) {
+        continue;
+      }
+      const width = Math.max(1.2, rocket.base * 0.016);
+      context.strokeStyle = `hsla(${rocket.hue}, 90%, 62%, 0.45)`;
+      context.lineWidth = width * 3.2;
+      context.beginPath();
+      context.moveTo(rocket.tailFrom.x, rocket.tailFrom.y);
+      context.lineTo(rocket.last.x, rocket.last.y);
+      context.stroke();
+      context.strokeStyle = `hsla(${rocket.hue}, 60%, 92%, 0.95)`;
+      context.lineWidth = width;
+      context.stroke();
+    }
+    context.restore();
 
     for (const rocket of rockets) {
       // 炸開後主體就交給粒子，不再畫升空中的貓
