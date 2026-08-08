@@ -10,11 +10,14 @@
   // 取樣用離屏畫布：貓咪影格縮到低解析度，一個像素換一顆剪影碎片
   const sampler = document.createElement("canvas");
   const samplerContext = sampler.getContext("2d", { willReadFrequently: true });
-  // 紙張風格用的兩張離屏圖：皺白紙只畫一次，破洞後面透出的循環動畫每格重畫
+  // 紙張風格用的三張離屏圖：紙只畫一次；鉛筆痕跡累積在自己那層慢慢淡掉；
+  // 破洞後面的流動動畫每格重畫，而且是整片全螢幕的，洞只是遮罩
   const paperCanvas = document.createElement("canvas");
   const paperContext = paperCanvas.getContext("2d");
-  const noiseCanvas = document.createElement("canvas");
-  const noiseContext = noiseCanvas.getContext("2d");
+  const pencilCanvas = document.createElement("canvas");
+  const pencilContext = pencilCanvas.getContext("2d");
+  const flowCanvas = document.createElement("canvas");
+  const flowContext = flowCanvas.getContext("2d");
   const meter = document.createElement("div");
 
   // 四隻寫實貓，各有一套 6 格連續動作；發射時隨機抽一隻
@@ -23,7 +26,7 @@
   const SHARD_GRID = 56; // 剪影取樣格數：夠細才散得成點狀雲而不是一塊塊馬賽克
   const SHARD_HOLD = 2; // 剪影定格幾個 step 才散開
   const STEP_MS = 1000 / 12; // 逐格動畫：整套模擬固定跑 12 fps，刻意保留頓挫感
-  const RISE_MS = 780;
+  const RISE_MS = 520; // 往上衝的爆發感，慢了就沒有煙火的勁
   const errorMessage = "請允許麥克風權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
 
   const audio = {
@@ -51,9 +54,8 @@
   const rockets = [];
   const strokes = [];
   const pending = [];
-  const holes = []; // 紙張上的破洞，各自跑「炸開 → 蓋回去成撕裂縫 → 淡出」
-  const pencils = []; // 已經畫完的鉛筆軌跡，留在紙上慢慢變淡
-  let noiseTick = 0;
+  const holes = []; // 紙張上的破洞，各自跑「撕開 → 撐著 → 倒放合回去」
+  let flowTick = 0;
   let baseHue = 45;
   let framesReady = false;
 
@@ -224,7 +226,7 @@
       hue,
       style: state.style,
       cat: CAT_SETS[Math.floor(Math.random() * CAT_SETS.length)],
-      path: state.style === "paper" ? [] : null,
+      last: null, // 紙張風格用：上一格的鉛筆落點
       fade: 0,
       spin: random(-0.12, 0.12)
     });
@@ -366,8 +368,6 @@
       if (progress >= 1) {
         if (rocket.style === "paper") {
           punchHole(rocket, rocket.x + rocket.drift, rocket.apexY);
-          // 畫過的鉛筆線留在紙上慢慢變淡
-          pencils.push({ path: rocket.path, hue: rocket.hue, alpha: 1 });
           rockets.splice(i, 1);
         } else {
           shatter(rocket, rocket.x + rocket.drift, rocket.apexY);
@@ -376,16 +376,18 @@
         continue;
       }
       if (rocket.style === "paper") {
-        // 每格記一個點。橫向用低頻擺動而不是純隨機，線才會像手畫的自然彎曲
+        // 橫向用低頻擺動而不是純隨機，線才會像手畫的自然彎曲。
+        // 每格只把新的那一段撒進鉛筆層，畫過的部分就固定在紙上了
         const eased = rise(progress);
-        rocket.path.push({
+        const point = {
           x: rocket.x + rocket.drift * eased
-            + Math.sin(progress * 5.5 + rocket.spin * 12) * rocket.base * 0.11 + random(-2, 2),
-          y: lerp(display.height + rocket.base * 0.2, rocket.apexY, eased) + random(-2, 2),
-          // 重描時的偏移先存起來，不然每格重算會讓畫好的線一直抖
-          jx: random(-1, 1),
-          jy: random(-1, 1)
-        });
+            + Math.sin(progress * 5.5 + rocket.spin * 12) * rocket.base * 0.11 + random(-1.5, 1.5),
+          y: lerp(display.height + rocket.base * 0.2, rocket.apexY, eased) + random(-1.5, 1.5)
+        };
+        if (rocket.last) {
+          inkPencil(rocket.last, point, rocket.hue);
+        }
+        rocket.last = point;
         continue;
       }
       // 上升時每格滴幾筆尾巴
@@ -407,16 +409,17 @@
 
     for (let i = holes.length - 1; i >= 0; i -= 1) {
       holes[i].t += 1;
-      if (holes[i].t > 16) {
+      if (holes[i].t > 12) {
         holes.splice(i, 1);
       }
     }
 
-    for (let i = pencils.length - 1; i >= 0; i -= 1) {
-      pencils[i].alpha -= 0.025; // 約 3.3 秒淡掉，連打時畫面才不會積滿線
-      if (pencils[i].alpha <= 0) {
-        pencils.splice(i, 1);
-      }
+    // 整層鉛筆痕跡一起變淡：擦掉一點點就好，約 3 秒退乾淨
+    if (state.style === "paper") {
+      pencilContext.globalCompositeOperation = "destination-out";
+      pencilContext.fillStyle = "rgba(0, 0, 0, 0.035)";
+      pencilContext.fillRect(0, 0, display.width, display.height);
+      pencilContext.globalCompositeOperation = "source-over";
     }
 
     for (let i = strokes.length - 1; i >= 0; i -= 1) {
@@ -493,292 +496,295 @@
     context.restore();
   }
 
+
   // ── 紙張破裂煙火 ───────────────────────────────────────────────
 
-  // 皺白紙：成對的暗／亮細帶做出折痕，再灑細顆粒。只在 resize 時畫一次
+  // 一般的紙張質感：米白底、細顆粒、幾道很淡的纖維，不要折痕線條
   function paintPaper() {
     const w = display.width;
     const h = display.height;
     paperCanvas.width = w;
     paperCanvas.height = h;
-    paperContext.fillStyle = "#f4f1ea";
+    pencilCanvas.width = w;
+    pencilCanvas.height = h;
+    paperContext.fillStyle = "#f2efe8";
     paperContext.fillRect(0, 0, w, h);
 
-    // 方頭筆刷：圓頭粗線會變成一根根膠囊，看起來像棒子不像折痕
-    paperContext.lineCap = "butt";
-    for (let i = 0; i < 110; i += 1) {
-      const x = random(-0.2, 1.2) * w;
-      const y = random(-0.2, 1.2) * h;
+    // 大範圍、極低對比的明暗不均，紙才不會像一塊死板的色塊
+    for (let i = 0; i < 7; i += 1) {
+      const cx = random(0, w);
+      const cy = random(0, h);
+      const r = random(w * 0.3, w * 0.9);
+      const gradient = paperContext.createRadialGradient(cx, cy, 0, cx, cy, r);
+      const dark = Math.random() < 0.5;
+      gradient.addColorStop(0, dark ? "rgba(150, 145, 134, 0.05)" : "rgba(255, 255, 255, 0.5)");
+      gradient.addColorStop(1, "rgba(255, 255, 255, 0)");
+      paperContext.fillStyle = gradient;
+      paperContext.fillRect(0, 0, w, h);
+    }
+
+    // 紙纖維：很短、很淡的細線，方向隨機
+    paperContext.lineWidth = 1;
+    for (let i = 0; i < 900; i += 1) {
+      const x = Math.random() * w;
+      const y = Math.random() * h;
       const angle = random(0, Math.PI * 2);
-      // 折痕要夠長夠寬，尺度小了就變成一堆短棒
-      const length = random(h * 0.5, h * 1.6);
-      const width = random(40, 170);
-      const dx = Math.cos(angle) * length;
-      const dy = Math.sin(angle) * length;
-      // 暗面與亮面貼在一起，才有稜線的感覺；對比壓很低，紙才不會髒
-      const offset = width * 0.5;
-      const nx = Math.cos(angle + Math.PI / 2) * offset;
-      const ny = Math.sin(angle + Math.PI / 2) * offset;
-      paperContext.lineWidth = width;
-      paperContext.strokeStyle = `rgba(148, 143, 132, ${random(0.02, 0.055)})`;
+      const length = random(3, 14);
+      paperContext.strokeStyle = Math.random() < 0.5
+        ? `rgba(160, 154, 142, ${random(0.03, 0.09)})`
+        : `rgba(255, 255, 255, ${random(0.2, 0.5)})`;
       paperContext.beginPath();
       paperContext.moveTo(x, y);
-      paperContext.lineTo(x + dx, y + dy);
-      paperContext.stroke();
-      paperContext.strokeStyle = `rgba(255, 255, 255, ${random(0.07, 0.2)})`;
-      paperContext.beginPath();
-      paperContext.moveTo(x + nx, y + ny);
-      paperContext.lineTo(x + dx + nx, y + dy + ny);
+      paperContext.lineTo(x + Math.cos(angle) * length, y + Math.sin(angle) * length);
       paperContext.stroke();
     }
 
-    const grain = Math.round(w * h / 260);
+    const grain = Math.round(w * h / 90);
     for (let i = 0; i < grain; i += 1) {
-      paperContext.fillStyle = `rgba(90, 86, 78, ${random(0.015, 0.05)})`;
-      paperContext.fillRect(Math.random() * w, Math.random() * h, random(0.8, 2), random(0.8, 2));
+      paperContext.fillStyle = Math.random() < 0.55
+        ? `rgba(120, 115, 105, ${random(0.02, 0.07)})`
+        : `rgba(255, 255, 255, ${random(0.1, 0.35)})`;
+      paperContext.fillRect(Math.random() * w, Math.random() * h, 1, 1);
     }
   }
 
-  // 破洞後面透出的循環動畫：流動色帶 + 掃描線撕裂 + 雜訊，程式生成不用影片檔
-  function paintNoise() {
-    const s = 240;
-    if (noiseCanvas.width !== s) {
-      noiseCanvas.width = s;
-      noiseCanvas.height = s;
+  // 洞後面透出的循環動畫：全息大理石的流動。整片鋪滿畫面、和洞無關，
+  // 洞只是把它露出來的遮罩，所以洞變大變小時後面的畫面不會跟著縮放。
+  function paintFlow() {
+    const w = 320;
+    const h = 400;
+    if (flowCanvas.width !== w) {
+      flowCanvas.width = w;
+      flowCanvas.height = h;
     }
-    noiseTick += 1;
-    noiseContext.fillStyle = "#05060a";
-    noiseContext.fillRect(0, 0, s, s);
+    flowTick += 1;
+    const time = flowTick * 0.024;
 
-    noiseContext.lineCap = "round";
-    for (let i = 0; i < 16; i += 1) {
-      const phase = noiseTick * 0.07 + i * 0.55;
-      noiseContext.strokeStyle = `hsla(${(baseHue + i * 24 + noiseTick * 1.6) % 360}, 95%, 62%, 0.6)`;
-      noiseContext.lineWidth = 7 + Math.sin(phase) * 5;
-      noiseContext.beginPath();
-      for (let x = 0; x <= s; x += 8) {
-        const y = s * 0.5 + Math.sin(x * 0.021 + phase) * s * 0.24
-          + Math.sin(x * 0.052 - phase * 1.7) * s * 0.08 + (i - 7.5) * 13;
-        if (x === 0) {
-          noiseContext.moveTo(x, y);
-        } else {
-          noiseContext.lineTo(x, y);
+    flowContext.fillStyle = "#c9ccd3";
+    flowContext.fillRect(0, 0, w, h);
+    flowContext.lineCap = "round";
+
+    // 帶要夠密，不然洞只露出全螢幕的一小塊、裡面看起來會太空
+    const bands = 46;
+    for (let i = 0; i < bands; i += 1) {
+      const phase = time + i * 0.62;
+      // 用三角函數決定每條帶的粗細與色相，不能用 random，不然每格會閃
+      const wobble = Math.sin(phase * 1.7);
+      const baseY = (i / bands) * (h + 120) - 60;
+      const trace = (offset) => {
+        flowContext.beginPath();
+        for (let x = -24; x <= w + 24; x += 9) {
+          const y = baseY + offset
+            + Math.sin(x * 0.0135 + phase) * 36
+            + Math.sin(x * 0.0312 - phase * 1.6) * 15
+            + Math.sin(x * 0.0071 + phase * 0.4) * 22;
+          if (x === -24) {
+            flowContext.moveTo(x, y);
+          } else {
+            flowContext.lineTo(x, y);
+          }
         }
-      }
-      noiseContext.stroke();
-    }
+        flowContext.stroke();
+      };
 
-    // 把自己的一條橫帶往旁邊搬，就是訊號撕裂
-    for (let i = 0; i < 22; i += 1) {
-      const y = Math.random() * s;
-      const band = random(1, 6);
-      noiseContext.drawImage(noiseCanvas, 0, y, s, band, random(-16, 16), y, s, band);
-    }
-
-    for (let i = 0; i < 380; i += 1) {
-      noiseContext.fillStyle = `rgba(255, 255, 255, ${random(0.05, 0.35)})`;
-      noiseContext.fillRect(Math.random() * s, Math.random() * s, random(1, 3), random(1, 2));
+      // 珍珠白主帶。帶要夠寬，細線條會變成一條條的線而不是流動的塊面
+      flowContext.strokeStyle = `hsla(${(baseHue + i * 7 + flowTick * 0.6) % 360}, ${14 + wobble * 10}%, ${86 + wobble * 8}%, 0.92)`;
+      flowContext.lineWidth = 28 + wobble * 12;
+      trace(0);
+      // 黑色深溝壓在帶的下緣，是這種大理石紋的骨架，不夠深整片就糊成灰
+      flowContext.strokeStyle = `rgba(16, 16, 24, ${0.72 + wobble * 0.2})`;
+      flowContext.lineWidth = 4 + Math.sin(phase * 2.3) * 2.6;
+      trace(11 + wobble * 3);
+      // 虹光：溝的另一側帶一道青／粉／綠的細邊
+      flowContext.strokeStyle = `hsla(${(baseHue + i * 47 + flowTick * 2) % 360}, 95%, 72%, 0.42)`;
+      flowContext.lineWidth = 2 + Math.sin(phase * 1.1) * 1.2;
+      trace(-8 - wobble * 3);
     }
   }
 
-  // 每個洞的輪廓都不一樣：隨機頂點數與半徑，再各自帶一點角度抖動
+  // 撕開的破口：從鉛筆線末端那個小裂口等比長大，邊上掀起大塊紙片。
+  // 影片裡的關鍵不是洞本身，是那些翻起來的紙片與它們打在紙面上的硬邊投影。
   function punchHole(rocket, x, y) {
-    const radius = rocket.base * 0.5;
-    // 頂點少、邊就長，輪廓才是大致圓潤的破口；每個頂點都加齒會變成齒輪
-    const count = Math.round(random(6, 10));
+    const radius = rocket.base * 0.55;
+    const count = Math.round(random(7, 11));
     const points = [];
     for (let i = 0; i < count; i += 1) {
       const span = (Math.PI * 2) / count;
-      // 角度抖動要遠小於毛刺的偏移，不然毛刺會越過下一個頂點、路徑自己打結
-      const angle = (i / count) * Math.PI * 2 + random(-0.08, 0.08);
-      const hasBurr = Math.random() < 0.4; // 只有少數幾段邊撕出尖角
+      const angle = (i / count) * Math.PI * 2 + random(-0.1, 0.1);
+      const hasBurr = Math.random() < 0.45;
       points.push({
         angle,
-        radius: radius * random(0.86, 1.12),
+        radius: radius * random(0.84, 1.14),
         hasBurr,
         burrAngle: angle + span * random(0.4, 0.6),
-        burrRadius: radius * (Math.random() < 0.5 ? random(0.58, 0.74) : random(1.14, 1.32)),
-        flap: Math.random() < 0.5, // 只有部分邊翻起紙片，邊緣才不規則
-        // 翻捲片的形狀要在這裡定好，每格重算會讓紙片抖動
-        lift: random(1.14, 1.3),
-        bulge: random(1.02, 1.14)
+        burrRadius: radius * (Math.random() < 0.5 ? random(0.6, 0.76) : random(1.1, 1.26)),
+        // 掀起的紙片：夠大才看得出是撕開的，形狀在這裡定死不然每格會抖
+        flap: Math.random() < 0.68,
+        // 掀起的幅度差距要大，每片都一樣就排成花瓣了
+        lift: Math.random() < 0.4 ? random(1.04, 1.16) : random(1.24, 1.55),
+        skew: random(-0.14, 0.14),
+        bulge: random(1.0, 1.14),
+        shade: random(0.6, 0.9)
       });
     }
-    holes.push({ x, y, radius, points, tilt: random(0, Math.PI), t: 0 });
+    holes.push({ x, y, radius, points, t: 0 });
   }
 
-  // 洞的四個階段（單位是 step，12fps）：炸開 → 撐著 → 蓋回去 → 撕裂縫淡出
-  function holePhase(hole) {
-    if (hole.t < 2) {
-      return { open: hole.t / 2, seam: 1 };
+  // 撕開 → 撐著 → 原樣倒放合回去
+  function holeOpen(hole) {
+    if (hole.t < 4) {
+      const p = hole.t / 4;
+      return p * p * (3 - 2 * p); // 起步猛、收尾緩，像紙一下子被扯開
     }
-    if (hole.t < 7) {
-      return { open: 1, seam: 1 };
+    if (hole.t < 8) {
+      return 1;
     }
-    if (hole.t < 11) {
-      return { open: 1 - (hole.t - 7) / 4, seam: 1 };
-    }
-    return { open: 0, seam: clamp(1 - (hole.t - 11) / 5, 0, 1) };
+    const p = (hole.t - 8) / 4;
+    return 1 - p * p * (3 - 2 * p);
   }
 
-  // 直線相連才留得住撕裂的尖角；圓滑曲線會把邊磨成花瓣
-  function tracePath(hole) {
+  function tracePath(hole, scale) {
     context.beginPath();
     for (let i = 0; i < hole.points.length; i += 1) {
       const point = hole.points[i];
-      const px = Math.cos(point.angle) * point.radius;
-      const py = Math.sin(point.angle) * point.radius;
+      const r = point.radius * scale;
+      const px = Math.cos(point.angle) * r;
+      const py = Math.sin(point.angle) * r;
       if (i === 0) {
         context.moveTo(px, py);
       } else {
         context.lineTo(px, py);
       }
       if (point.hasBurr) {
-        context.lineTo(Math.cos(point.burrAngle) * point.burrRadius, Math.sin(point.burrAngle) * point.burrRadius);
+        const br = point.burrRadius * scale;
+        context.lineTo(Math.cos(point.burrAngle) * br, Math.sin(point.burrAngle) * br);
       }
     }
     context.closePath();
   }
 
   function drawHole(hole) {
-    const phase = holePhase(hole);
-    const radius = hole.radius;
-    // 蓋回去時沿短軸壓扁，洞自然收成一條撕裂縫
-    const squash = Math.max(0.025, phase.open);
-
-    context.save();
-    context.globalAlpha = phase.seam;
-    context.translate(hole.x, hole.y);
-    context.rotate(hole.tilt);
-    context.scale(1, squash);
-
-    // 先用帶模糊的填色打底，外溢的部分就是洞在紙上的落影
-    context.save();
-    context.shadowColor = "rgba(60, 55, 48, 0.5)";
-    context.shadowBlur = radius * 0.4;
-    context.shadowOffsetY = radius * 0.08;
-    context.fillStyle = "#2a2a2e";
-    tracePath(hole);
-    context.fill();
-    context.restore();
-
-    // 洞裡透出循環動畫，邊緣再壓一圈內陰影做出往內的深度
-    context.save();
-    tracePath(hole);
-    context.clip();
-    context.drawImage(noiseCanvas, -radius * 1.25, -radius * 1.25, radius * 2.5, radius * 2.5);
-    context.shadowColor = "rgba(0, 0, 0, 0.9)";
-    context.shadowBlur = radius * 0.5;
-    context.strokeStyle = "rgba(0, 0, 0, 0.8)";
-    context.lineWidth = radius * 0.12;
-    tracePath(hole);
-    context.stroke();
-    context.restore();
-
-    // 沿邊翻起來的紙片：白色舌狀，帶落影才立體
-    context.shadowColor = "rgba(60, 55, 48, 0.45)";
-    context.shadowBlur = radius * 0.14;
-    context.shadowOffsetY = radius * 0.05;
-    for (let i = 0; i < hole.points.length; i += 1) {
-      const a = hole.points[i];
-      if (!a.flap) {
-        continue;
-      }
-      const b = hole.points[(i + 1) % hole.points.length];
-      const ax = Math.cos(a.angle) * a.radius;
-      const ay = Math.sin(a.angle) * a.radius;
-      const bx = Math.cos(b.angle) * b.radius;
-      const by = Math.sin(b.angle) * b.radius;
-      // 兩端各沿自己的角度往外推，翻起來的紙片必定落在洞外，不會凹進洞裡
-      const outAx = Math.cos(a.angle) * a.radius * a.lift;
-      const outAy = Math.sin(a.angle) * a.radius * a.lift;
-      const outBx = Math.cos(b.angle) * b.radius * a.lift;
-      const outBy = Math.sin(b.angle) * b.radius * a.lift;
-      const gradient = context.createLinearGradient(ax, ay, outAx, outAy);
-      gradient.addColorStop(0, "rgba(196, 192, 182, 0.95)");
-      gradient.addColorStop(1, "#fdfcf8");
-      context.fillStyle = gradient;
-      // 外緣用曲線收邊，翻起來的紙片才是圓鈍的舌狀而不是尖角
-      context.beginPath();
-      context.moveTo(ax, ay);
-      context.lineTo(outAx, outAy);
-      context.quadraticCurveTo(((outAx + outBx) / 2) * a.bulge, ((outAy + outBy) / 2) * a.bulge, outBx, outBy);
-      context.lineTo(bx, by);
-      context.closePath();
-      context.fill();
-    }
-    context.restore();
-  }
-
-  // 同一條路徑重描好幾遍、每遍偏移一點，疊出手繪的毛邊
-  function strokePath(path, wobble) {
-    context.beginPath();
-    context.moveTo(path[0].x, path[0].y);
-    for (let i = 1; i < path.length; i += 1) {
-      context.lineTo(path[i].x + path[i].jx * wobble, path[i].y + path[i].jy * wobble);
-    }
-    context.stroke();
-  }
-
-  // 鉛筆壓在紙紋上留下的碎點。跟著線段一起生成並存起來，畫面上才不會每格閃爍
-  function buildGrain(path) {
-    if (!path.grain) {
-      path.grain = [];
-      path.grainBuilt = 1;
-    }
-    while (path.grainBuilt < path.length) {
-      const i = path.grainBuilt;
-      for (let j = 0; j < 5; j += 1) {
-        const amount = Math.random();
-        path.grain.push({
-          x: lerp(path[i - 1].x, path[i].x, amount) + random(-5, 5),
-          y: lerp(path[i - 1].y, path[i].y, amount) + random(-5, 5),
-          size: random(0.8, 2.4),
-          alpha: random(0.15, 0.5)
-        });
-      }
-      path.grainBuilt += 1;
-    }
-  }
-
-  // 鉛筆／色鉛筆線：主線抖一點，沿線再灑顆粒，才不像向量直線
-  function drawPencil(path, hue, alpha) {
-    if (path.length < 2) {
+    const open = holeOpen(hole);
+    if (open <= 0.01) {
       return;
     }
-    context.save();
-    context.lineCap = "round";
-    context.lineJoin = "round";
-    // 參考圖的筆桿就是一根深灰鉛筆，加色暈只會讓它看起來像電線
-    context.strokeStyle = `rgba(96, 93, 90, ${alpha * 0.45})`;
-    context.lineWidth = 11;
-    strokePath(path, 3.5);
-    context.strokeStyle = `rgba(64, 62, 60, ${alpha * 0.7})`;
-    context.lineWidth = 7.5;
-    strokePath(path, 1.6);
-    context.strokeStyle = `rgba(38, 36, 34, ${alpha * 0.92})`;
-    context.lineWidth = 4;
-    strokePath(path, 0);
+    const radius = hole.radius * open;
 
-    buildGrain(path);
-    for (const dot of path.grain) {
-      context.fillStyle = `rgba(48, 46, 44, ${alpha * dot.alpha})`;
-      context.fillRect(dot.x, dot.y, dot.size, dot.size);
+    context.save();
+    context.translate(hole.x, hole.y);
+
+    // 洞裡透出全螢幕的流動畫面。用 setTransform 把它畫回畫面座標，
+    // 洞怎麼縮放，後面的影像都不動——就像前面蓋著一張紙
+    context.save();
+    tracePath(hole, open);
+    context.clip();
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.drawImage(flowCanvas, 0, 0, display.width, display.height);
+    context.restore();
+
+    // 洞內沿邊一圈暗，做出往內凹的厚度
+    context.save();
+    tracePath(hole, open);
+    context.clip();
+    context.shadowColor = "rgba(0, 0, 0, 0.7)";
+    context.shadowBlur = radius * 0.42;
+    context.strokeStyle = "rgba(0, 0, 0, 0.35)";
+    context.lineWidth = radius * 0.05;
+    tracePath(hole, open);
+    context.stroke();
+    context.restore();
+
+    // 掀起來的紙片。先畫投影再畫紙片，投影才不會蓋在自己上面
+    for (let pass = 0; pass < 2; pass += 1) {
+      for (let i = 0; i < hole.points.length; i += 1) {
+        const a = hole.points[i];
+        if (!a.flap) {
+          continue;
+        }
+        const b = hole.points[(i + 1) % hole.points.length];
+        const ar = a.radius * open;
+        const br = b.radius * open;
+        const ax = Math.cos(a.angle) * ar;
+        const ay = Math.sin(a.angle) * ar;
+        const bx = Math.cos(b.angle) * br;
+        const by = Math.sin(b.angle) * br;
+        // 掀起的量隨開洞進度增加，紙片才是「越撕越開」而不是一開始就全開
+        const lift = 1 + (a.lift - 1) * open;
+        const outAx = Math.cos(a.angle + a.skew) * ar * lift;
+        const outAy = Math.sin(a.angle + a.skew) * ar * lift;
+        const outBx = Math.cos(b.angle + a.skew) * br * lift;
+        const outBy = Math.sin(b.angle + a.skew) * br * lift;
+
+        // 投影是同一片紙往右下位移的複本。路徑的點在加進去的當下就換算成畫面座標了，
+        // 所以位移必須寫進座標裡，事後再 translate 是不會動的
+        const ox = pass === 0 ? radius * 0.12 : 0;
+        const oy = pass === 0 ? radius * 0.15 : 0;
+        context.beginPath();
+        context.moveTo(ax + ox, ay + oy);
+        context.lineTo(outAx + ox, outAy + oy);
+        context.quadraticCurveTo(
+          ((outAx + outBx) / 2) * a.bulge + ox,
+          ((outAy + outBy) / 2) * a.bulge + oy,
+          outBx + ox,
+          outBy + oy
+        );
+        context.lineTo(bx + ox, by + oy);
+        context.closePath();
+
+        if (pass === 0) {
+          // 影子要柔，實心的深灰塊看起來會像又疊了一張紙
+          context.save();
+          context.filter = `blur(${Math.max(1, radius * 0.06)}px)`;
+          context.fillStyle = `rgba(52, 46, 40, ${0.42 * a.shade * open})`;
+          context.fill();
+          context.restore();
+          continue;
+        }
+
+        const gradient = context.createLinearGradient(ax, ay, outAx, outAy);
+        gradient.addColorStop(0, "rgba(206, 201, 191, 0.98)");
+        gradient.addColorStop(0.45, "rgba(240, 237, 229, 1)");
+        gradient.addColorStop(1, "#fffefb");
+        context.fillStyle = gradient;
+        context.fill();
+      }
     }
     context.restore();
+  }
+
+  // 鉛筆筆跡：沿路徑密集撒碳粉顆粒，中間密邊緣稀。
+  // 直接畫進鉛筆層並且只畫新的那一段，既不會每格重算而抖動，也不用重畫整條線
+  function inkPencil(from, to, hue) {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = Math.hypot(dx, dy);
+    const nx = -dy / (length || 1);
+    const ny = dx / (length || 1);
+    const steps = Math.max(2, Math.round(length / 1.2));
+
+    for (let i = 0; i < steps; i += 1) {
+      const t = i / steps;
+      const cx = from.x + dx * t;
+      const cy = from.y + dy * t;
+      for (let j = 0; j < 7; j += 1) {
+        // 用兩個亂數相加逼近常態分布，顆粒才會集中在筆芯中央
+        const spread = (Math.random() + Math.random() - 1) * 3.4;
+        const fade = 1 - Math.abs(spread) / 3.4;
+        pencilContext.fillStyle = `rgba(46, 44, 42, ${0.16 + fade * 0.5})`;
+        pencilContext.fillRect(cx + nx * spread, cy + ny * spread, 1, 1);
+      }
+      // 偶爾壓重一點，鉛筆的深淺才有變化
+      if (Math.random() < 0.22) {
+        pencilContext.fillStyle = `hsla(${hue}, 30%, 22%, 0.5)`;
+        pencilContext.fillRect(cx + nx * random(-1.4, 1.4), cy + ny * random(-1.4, 1.4), random(1, 2.2), random(1, 2.2));
+      }
+    }
   }
 
   function drawPaperScene() {
     context.drawImage(paperCanvas, 0, 0);
-    for (const pencil of pencils) {
-      drawPencil(pencil.path, pencil.hue, pencil.alpha);
-    }
-    for (const rocket of rockets) {
-      if (rocket.fade === 0 && rocket.path) {
-        drawPencil(rocket.path, rocket.hue, 1);
-      }
-    }
-    paintNoise();
+    context.drawImage(pencilCanvas, 0, 0);
+    paintFlow();
     for (const hole of holes) {
       drawHole(hole);
     }
