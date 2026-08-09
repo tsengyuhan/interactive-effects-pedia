@@ -16,8 +16,11 @@
   const paperContext = paperCanvas.getContext("2d");
   const pencilCanvas = document.createElement("canvas");
   const pencilContext = pencilCanvas.getContext("2d");
+  // 流體背景是每個像素各自算的（域變形雜訊），Canvas 2D 在 12fps 下跑不動，
+  // 所以這一層改用 WebGL 跑一支 fragment shader。preserveDrawingBuffer 讓它能安全地
+  // 被 drawImage 當成來源圖
   const flowCanvas = document.createElement("canvas");
-  const flowContext = flowCanvas.getContext("2d");
+  const gl = flowCanvas.getContext("webgl", { preserveDrawingBuffer: true, antialias: false });
   // 合成用：先用破口遮罩把流動圖剪成洞的形狀，再貼到畫面上
   const tearCanvas = document.createElement("canvas");
   const tearContext = tearCanvas.getContext("2d");
@@ -43,7 +46,7 @@
   const PAPER_RISE_MS = 170; // 鉛筆線是一記快甩，比貓咪更短更急
   const PAPER_SUBSTEPS = 4; // 一格拆成四小段畫，線甩得再快也不會斷成折線
   const MAX_DPR = 2; // 畫布跟著螢幕像素密度放大，不然高 DPI 螢幕上整層會被瀏覽器拉伸糊掉；
-                     // 封在 2 是因為粒子數以千計，再高就開始掉格
+  // 封在 2 是因為粒子數以千計，再高就開始掉格
   const errorMessage = "請允許麥克風權限後重新整理頁面；若直接開檔案無法使用，請改用 start.bat 啟動";
 
   const audio = {
@@ -262,9 +265,10 @@
     if (state.style === "flow") {
       return; // 只看背景動態時不發射，畫面就純粹是那層流動
     }
-    // 紙張是色鉛筆：每一發隨機抽色，像從一盒色鉛筆裡輪流挑；貓咪則跟著使用者選的煙火色
+    // 紙張是色鉛筆：色相切成 12 支筆去抽，而不是 0~360 連續亂數——
+    // 連續亂數常常抽到相鄰的色相，兩發看起來就像同一支筆
     const hue = state.style === "paper"
-      ? random(0, 360)
+      ? (Math.floor(Math.random() * 12) * 30 + random(-7, 7) + 360) % 360
       : (baseHue + random(-12, 12) + 360) % 360;
     const base = Math.min(display.width, display.height) * 0.16 * state.size;
     rockets.push({
@@ -280,6 +284,8 @@
       style: state.style,
       riseMs: state.style === "paper" ? PAPER_RISE_MS : RISE_MS,
       cat: CAT_SETS[Math.floor(Math.random() * CAT_SETS.length)],
+      // 筆芯粗細：一半維持原本的細筆，另一半抽一支明顯更粗的，畫面才有輕重變化
+      nib: Math.random() < 0.5 ? 1 : random(1.5, 2.6),
       last: null, // 紙張風格用：上一格的鉛筆落點
       fade: 0,
       spin: random(-0.12, 0.12)
@@ -413,7 +419,7 @@
         if (rocket.style === "paper") {
           // 補上最後一段收到頂點，破口才不會浮在筆跡上方
           if (rocket.last) {
-            inkPencil(rocket.last, { x: rocket.x + rocket.drift, y: rocket.apexY }, rocket.hue, 0.45);
+            inkPencil(rocket.last, { x: rocket.x + rocket.drift, y: rocket.apexY }, rocket.hue, 0.45, rocket.nib);
           }
           punchHole(rocket, rocket.x + rocket.drift, rocket.apexY);
           rockets.splice(i, 1);
@@ -436,7 +442,7 @@
           const p = clamp(lerp(from, progress, s / PAPER_SUBSTEPS), 0, 1);
           const point = pencilPoint(rocket, p);
           // 越往上筆壓越輕，收出筆鋒，才有一筆用力劃上去的感覺
-          inkPencil(rocket.last, point, rocket.hue, lerp(1.35, 0.45, p));
+          inkPencil(rocket.last, point, rocket.hue, lerp(1.35, 0.45, p), rocket.nib);
           rocket.last = point;
         }
         continue;
@@ -576,64 +582,154 @@
     }
   }
 
-  // 洞後面透出的循環動畫：全息大理石的流動。整片鋪滿畫面、和洞無關，
-  // 洞只是把它露出來的遮罩，所以洞變大變小時後面的畫面不會跟著縮放。
+  // ── 洞後面的流體背景 ─────────────────────────────────────────
+  // 黑底上的灰銀湍流，邊緣泛出霓虹虹光。每個像素都要各自算域變形雜訊，
+  // Canvas 2D 逐像素在 12fps 下跑不動，所以這層是一支 fragment shader。
+
+  const FLOW_VERT = `
+    attribute vec2 p;
+    void main() { gl_Position = vec4(p, 0.0, 1.0); }
+  `;
+
+  const FLOW_FRAG = `
+    precision highp float;
+    uniform vec2 uResolution;
+    uniform float uTime;
+    uniform float uHue;
+
+    float hash(vec2 p) {
+      return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+    }
+
+    // 值雜訊：四角取樣再用 smoothstep 內插，比 Perlin 便宜、疊起來看不出差別
+    float noise(vec2 p) {
+      vec2 i = floor(p);
+      vec2 f = fract(p);
+      vec2 u = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+                 mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+    }
+
+    // 四層就夠了。再多層只是在已經被域變形扭爛的圖上加看不見的細節，白花 GPU
+    float fbm(vec2 p) {
+      float v = 0.0;
+      float a = 0.5;
+      for (int i = 0; i < 4; i++) {
+        v += a * noise(p);
+        p = p * 2.03 + 17.3;
+        a *= 0.5;
+      }
+      return v;
+    }
+
+    void main() {
+      // 兩軸都用高度正規化，長寬比才不會把圖案壓扁；x 取樣比 y 密，
+      // 流體就會是被拖長的條狀而不是一團團的雲
+      vec2 uv = gl_FragCoord.xy / uResolution.y;
+      vec2 p = vec2(uv.x * 3.6, uv.y * 2.4);
+      float t = uTime;
+
+      // 域變形：拿一層 fbm 的輸出去偏移下一層的取樣座標，平行的紋路就會被扭成漩渦。
+      // 這是大理石／潑漆那種湍流感唯一的來源，少了它就只是一團雲
+      vec2 q = vec2(fbm(p + vec2(0.0, t * 0.12)), fbm(p + vec2(4.7 - t * 0.09, 2.1)));
+      vec2 r = vec2(fbm(p + 4.2 * q + vec2(1.7, 9.2)), fbm(p + 4.2 * q + vec2(8.3, 2.8)));
+      float f = fbm(p + 4.0 * r);
+
+      // 整片都是流體，只是調子從近黑到亮白連續變化——不用門檻把「有沒有流體」切開。
+      // 切開的話低於門檻的地方會變成一大片純黑的空洞，畫面就空了一半。
+      // 取值範圍刻意開得比 fbm 實際範圍寬（不裁掉兩端），再用 gamma 把中間調壓暗，
+      // 這樣暗部仍然看得到流動的紋理，而不是死黑
+      float v = smoothstep(0.10, 0.78, f);
+      float tone = pow(v, 1.2);
+      float shade = 0.22 + 0.78 * smoothstep(0.18, 0.72, f + 0.3 * r.x);
+      vec3 col = vec3((0.045 + 0.93 * tone) * (0.55 + 0.45 * shade));
+
+      // 亮脈：很窄的一道白，做出液態金屬的高光稜線
+      col += vec3((1.0 - smoothstep(0.0, 0.014, abs(f - 0.60))) * 0.9);
+
+      // 遮罩控制虹光長在哪些區域。每條等值線都上虹光的話，整張圖會變成滿滿的
+      // 霓虹電線；但遮罩頻率訂太低（試過 0.5）整張圖只會有一兩塊彩虹擠在角落。
+      // 頻率抬高讓彩虹散佈到全畫面，門檻同時抬高把每一塊的面積壓小
+      float mask = smoothstep(0.3, 0.5, fbm(p * 1.3 + vec2(40.0, 17.0)));
+      float bandA = (1.0 - smoothstep(0.0, 0.050, abs(f - 0.47))) * mask;
+      float bandB = (1.0 - smoothstep(0.0, 0.028, abs(f - 0.57))) * mask;
+      float amount = clamp(bandA + bandB * 0.8, 0.0, 1.0);
+
+      // 先把底下的灰壓掉再上色。直接加在白色上只會被洗成粉彩，
+      // 目標是彩虹「取代」那塊流體的顏色，不是疊在上面
+      col *= 1.0 - 0.8 * amount;
+      float phase = uHue + f * 5.0 + r.x * 2.0;
+      col += (0.5 + 0.5 * cos(6.2831 * (phase + vec3(0.0, 0.33, 0.67)))) * amount * 1.45;
+
+      gl_FragColor = vec4(col, 1.0);
+    }
+  `;
+
+  let flowProgram = null;
+  let flowLocations = null;
+  let flowTried = false;
+
+  function initFlow() {
+    flowTried = true;
+    if (!gl) {
+      return;
+    }
+    const compile = (type, source) => {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(shader));
+      }
+      return shader;
+    };
+    const program = gl.createProgram();
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, FLOW_VERT));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FLOW_FRAG));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error(gl.getProgramInfoLog(program));
+      return;
+    }
+    // 一個蓋滿畫面的大三角形，比兩個三角形的 quad 少一次頂點處理也沒有對角線接縫
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    const attribute = gl.getAttribLocation(program, "p");
+    gl.enableVertexAttribArray(attribute);
+    gl.vertexAttribPointer(attribute, 2, gl.FLOAT, false, 0, 0);
+    gl.useProgram(program);
+    flowProgram = program;
+    flowLocations = {
+      resolution: gl.getUniformLocation(program, "uResolution"),
+      time: gl.getUniformLocation(program, "uTime"),
+      hue: gl.getUniformLocation(program, "uHue")
+    };
+  }
+
+  // 整片鋪滿畫面、和洞無關，洞只是把它露出來的遮罩，
+  // 所以洞變大變小時後面的畫面不會跟著縮放。
   function paintFlow() {
-    // 破口只露出這張圖的一小塊，解析度不夠的話紋理會變成幾片色塊。
-    // 「只看背景動態」時它會被拉滿全螢幕，所以畫布加倍——但用 setTransform 把座標縮回
-    // 480×600，下面的紋理數值一個都不用改，圖案尺度也不會跟著變
-    const w = 480;
-    const h = 600;
-    const zoom = state.style === "flow" ? 2.5 : 1;
-    if (flowCanvas.width !== Math.round(w * zoom)) {
-      flowCanvas.width = Math.round(w * zoom);
-      flowCanvas.height = Math.round(h * zoom);
-      flowContext.setTransform(zoom, 0, 0, zoom, 0, 0);
+    // 固定直式比例，再拉伸貼滿畫面。寬螢幕上的橫向拉伸是刻意的——
+    // 紋理被拉長才有流體被拖開的感覺，比例「正確」反而變得細碎。
+    // 「只看背景動態」會拉滿全螢幕所以畫大一點
+    const w = state.style === "flow" ? 960 : 480;
+    const h = Math.round(w * 1.25);
+    if (flowCanvas.width !== w) {
+      flowCanvas.width = w;
+      flowCanvas.height = h;
     }
     flowTick += 1;
-    const time = flowTick * 0.024;
-
-    // 底色壓深一點，貼在白紙上的破口才有對比、才看得出是「後面另有一層」
-    flowContext.fillStyle = "#a2a8b5";
-    flowContext.fillRect(0, 0, w, h);
-    flowContext.lineCap = "round";
-
-    // 帶要夠密，不然洞只露出全螢幕的一小塊、裡面看起來會太空
-    const bands = 78;
-    for (let i = 0; i < bands; i += 1) {
-      const phase = time + i * 0.62;
-      // 用三角函數決定每條帶的粗細與色相，不能用 random，不然每格會閃
-      const wobble = Math.sin(phase * 1.7);
-      const baseY = (i / bands) * (h + 120) - 60;
-      const trace = (offset) => {
-        flowContext.beginPath();
-        for (let x = -24; x <= w + 24; x += 9) {
-          const y = baseY + offset
-            + Math.sin(x * 0.0135 + phase) * 36
-            + Math.sin(x * 0.0312 - phase * 1.6) * 15
-            + Math.sin(x * 0.0071 + phase * 0.4) * 22;
-          if (x === -24) {
-            flowContext.moveTo(x, y);
-          } else {
-            flowContext.lineTo(x, y);
-          }
-        }
-        flowContext.stroke();
-      };
-
-      // 珍珠白主帶。帶要夠寬，細線條會變成一條條的線而不是流動的塊面
-      flowContext.strokeStyle = `hsla(${(baseHue + i * 7 + flowTick * 0.6) % 360}, ${14 + wobble * 10}%, ${86 + wobble * 8}%, 0.92)`;
-      flowContext.lineWidth = 17 + wobble * 8;
-      trace(0);
-      // 黑色深溝壓在帶的下緣，是這種大理石紋的骨架，不夠深整片就糊成灰
-      flowContext.strokeStyle = `rgba(16, 16, 24, ${0.72 + wobble * 0.2})`;
-      flowContext.lineWidth = 3.2 + Math.sin(phase * 2.3) * 2;
-      trace(7 + wobble * 2);
-      // 虹光：溝的另一側帶一道青／粉／綠的細邊
-      flowContext.strokeStyle = `hsla(${(baseHue + i * 47 + flowTick * 2) % 360}, 95%, 72%, 0.42)`;
-      flowContext.lineWidth = 1.8 + Math.sin(phase * 1.1) * 1.2;
-      trace(-5 - wobble * 2);
+    if (!flowTried) {
+      initFlow();
     }
+    if (!flowProgram) {
+      return; // 沒有 WebGL 就讓這層留白，破口的紙片動畫本身還是照跑
+    }
+    gl.viewport(0, 0, w, h);
+    gl.uniform2f(flowLocations.resolution, w, h);
+    gl.uniform1f(flowLocations.time, flowTick * 0.022);
+    gl.uniform1f(flowLocations.hue, baseHue / 360);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
   // 撕開的破口用序列圖播放：程式畫的多邊形怎麼調都不夠自然。
@@ -647,17 +743,17 @@
       set: TEAR_SETS[Math.floor(Math.random() * TEAR_SETS.length)],
       t: 0
     });
-    sparkPencil(x, y, size * 0.42, rocket.hue);
+    sparkPencil(x, y, size * 0.42, rocket.hue, rocket.nib * 1.2);
   }
 
   // 破口周圍甩出幾筆色鉛筆短觸，當成煙火綻放的線條。
   // 一次全部畫完：破口本身只開合幾格，線條慢慢長出來反而拖住節奏
-  function sparkPencil(x, y, radius, hue) {
-    const rays = Math.round(random(8, 13));
+  function sparkPencil(x, y, radius, hue, nib) {
+    const rays = Math.round(random(10, 18));
     const start = random(0, Math.PI * 2);
     for (let i = 0; i < rays; i += 1) {
       const angle = start + (i / rays) * Math.PI * 2 + random(-0.2, 0.2);
-      const inner = radius * random(0.6, 0.85);
+      const inner = radius * random(0.8, 1);
       const outer = radius * random(1.15, 1.9);
       const bend = random(-0.32, 0.32); // 帶一點弧度才像手甩的，不然是放射狀直線
       const rayHue = (hue + random(-45, 45) + 360) % 360;
@@ -667,7 +763,7 @@
         const a = angle + bend * t;
         const r = lerp(inner, outer, t);
         const to = { x: x + Math.cos(a) * r, y: y + Math.sin(a) * r };
-        inkPencil(from, to, rayHue, lerp(1.1, 0.35, t)); // 由重到輕，末端收出筆鋒
+        inkPencil(from, to, rayHue, lerp(1.1, 0.35, t), nib); // 由重到輕，末端收出筆鋒
         from = to;
       }
     }
@@ -734,31 +830,39 @@
     };
   }
 
-  function inkPencil(from, to, hue, pressure) {
+  function inkPencil(from, to, hue, pressure, nib) {
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const length = Math.hypot(dx, dy);
     const nx = -dy / (length || 1);
     const ny = dx / (length || 1);
     const steps = Math.max(2, Math.round(length / 1.2));
+    const reach = 5.5 * pressure * nib;
+    // 顆粒數要跟著筆芯變寬一起加，不然粗筆只是把同樣的顆粒撒得更散、變成一條稀疏的霧
+    const grains = Math.round(11 * nib);
 
     for (let i = 0; i < steps; i += 1) {
       const t = i / steps;
       const cx = from.x + dx * t;
       const cy = from.y + dy * t;
-      for (let j = 0; j < 11; j += 1) {
+      for (let j = 0; j < grains; j += 1) {
         // 用兩個亂數相加逼近常態分布，顆粒才會集中在筆芯中央
-        const reach = 5.5 * pressure;
         const spread = (Math.random() + Math.random() - 1) * reach;
         const fade = 1 - Math.abs(spread) / reach;
-        // 色鉛筆：筆芯中央壓得深、顏色濃，往邊緣散開就變淡變亮
-        pencilContext.fillStyle = `hsla(${hue}, 72%, ${lerp(60, 30, fade)}%, ${0.16 + fade * 0.5})`;
+        // 色鉛筆：中央濃、邊緣淡。亮度要壓在中間偏亮——同一點會被幾十顆顆粒疊到，
+        // 疊加後只會越來越暗，起始值訂低的話整條線最後就變成看不出顏色的深色
+        pencilContext.fillStyle = `hsla(${hue}, ${lerp(70, 92, fade)}%, ${lerp(72, 54, fade)}%, ${0.08 + fade * 0.26})`;
         pencilContext.fillRect(cx + nx * spread, cy + ny * spread, 1, 1);
       }
       // 偶爾壓重一點，色鉛筆的深淺才有變化
       if (Math.random() < 0.22) {
-        pencilContext.fillStyle = `hsla(${hue}, 85%, 26%, 0.5)`;
-        pencilContext.fillRect(cx + nx * random(-1.4, 1.4), cy + ny * random(-1.4, 1.4), random(1, 2.2), random(1, 2.2));
+        pencilContext.fillStyle = `hsla(${hue}, 95%, 46%, 0.35)`;
+        pencilContext.fillRect(
+          cx + nx * random(-1.4, 1.4) * nib,
+          cy + ny * random(-1.4, 1.4) * nib,
+          random(1, 2.2) * nib,
+          random(1, 2.2) * nib
+        );
       }
     }
   }
@@ -767,6 +871,10 @@
     // 紙與鉛筆層的 backing store 已經乘過 dpr，所以要指定 CSS 尺寸貼回去
     context.drawImage(paperCanvas, 0, 0, display.width, display.height);
     context.drawImage(pencilCanvas, 0, 0, display.width, display.height);
+    // 沒有破口就沒人看得到這層，不用花 GPU 去算。停在原格再接著跑也看不出接縫
+    if (!holes.length) {
+      return;
+    }
     paintFlow();
     for (const hole of holes) {
       drawHole(hole);
@@ -963,12 +1071,12 @@
     audio.sampleRate = audio.context.sampleRate;
     audio.wave = new Float32Array(audio.analyser.fftSize);
     audio.spectrum = new Uint8Array(audio.analyser.frequencyBinCount);
-    resumeAudio().catch(() => {});
+    resumeAudio().catch(() => { });
   }
 
   function bindAudioResume() {
     const handler = () => {
-      resumeAudio().catch(() => {});
+      resumeAudio().catch(() => { });
     };
     window.addEventListener("pointerdown", handler);
     window.addEventListener("keydown", handler);
