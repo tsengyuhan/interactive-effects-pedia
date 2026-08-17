@@ -13,7 +13,14 @@ const GARMENTS = {
     sliderUrl: "assets/slider-jeans2.png",
     axis: "v",
     line: 1024,
-    apex: [288, 325, 486, 525, 768, 781]
+    apex: [288, 325, 486, 525, 768, 781],
+    // 這條原圖 y 對齊畫面頂端：裁掉腰頭上緣的深色帶，褲身看起來更近更滿
+    focusTop: 100,
+    // 腰頭帶（原圖 y < 此值）不讓內容穿透：AI 幀在腰頭下方挖空過度，
+    // 用閉合幀的同區布料墊底，腰頭旁邊才不會破一個洞
+    waistBottom: 285,
+    // 全開時腰頭左右各往外分開的原圖像素數（中間 2×此值寬可穿透）
+    waistSplit: 95
   },
   bag: {
     frames: Array.from({ length: 6 }, (_, i) => `assets/frames/bag-${i}.webp`),
@@ -167,14 +174,11 @@ function getLayout() {
   let offsetX;
   let offsetY;
   if (garment.axis === "v") {
-    // 牛仔褲：cover 滿版盡量置中（16:9 可見完整腰頭與鈕扣）；
-    // 超寬螢幕上下裁切時，把圖下移到拉鍊起點仍留在畫面內可抓
-    scale = Math.max(state.width / imageWidth, state.height / imageHeight);
+    // 牛仔褲：focusTop 對齊畫面頂端，比例以其下方的圖計算確保滿版
+    const focusTop = garment.focusTop || 0;
+    scale = Math.max(state.width / imageWidth, state.height / (imageHeight - focusTop));
     offsetX = (state.width - imageWidth * scale) * 0.5;
-    offsetY = Math.min(0, Math.max(
-      (state.height - imageHeight * scale) * 0.5,
-      24 - garment.apex[0] * scale
-    ));
+    offsetY = -focusTop * scale;
   } else {
     // 包包（水平拉鍊）：貼齊畫面寬，直式螢幕上下留邊（drawScene 補底色）
     scale = state.width / imageWidth;
@@ -289,6 +293,24 @@ function drawScene() {
   }
   context.drawImage(frames[i], layout.offsetX, layout.offsetY, dw, dh);
   context.globalAlpha = 1;
+  const waist = layout.garment.waistBottom;
+  if (waist) {
+    // 腰頭帶墊底：AI 幀在腰頭下方挖空過度，用閉合幀的布料補回。
+    // 切成左右兩半隨進度往外分開，中間留縫穿透，兌現「拉開才彈開」又不破洞
+    const split = layout.garment.waistSplit * state.progress * layout.scale;
+    const line = layout.garment.line;
+    const wh = waist * layout.scale;
+    context.globalCompositeOperation = "destination-over";
+    context.drawImage(
+      frames[0], 0, 0, line, waist,
+      layout.offsetX - split, layout.offsetY, line * layout.scale, wh
+    );
+    context.drawImage(
+      frames[0], line, 0, layout.imageWidth - line, waist,
+      layout.lineScreen + split, layout.offsetY, (layout.imageWidth - line) * layout.scale, wh
+    );
+    context.globalCompositeOperation = "source-over";
+  }
   drawSlider(layout, tipScreen(layout));
 }
 
