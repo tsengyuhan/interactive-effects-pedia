@@ -9,11 +9,11 @@ const gestureCursor = document.createElement("div");
 // 程式依進度在相鄰幀間交叉淡化。apex=每幀開口尖點沿拉鍊軸的原圖座標（素材量測）。
 const GARMENTS = {
   jeans: {
-    frames: Array.from({ length: 6 }, (_, i) => `assets/frames/jeansv2-${i}.webp`),
+    frames: Array.from({ length: 6 }, (_, i) => `assets/frames/jeansv3-${i}.webp`),
     sliderUrl: "assets/slider-jeans2.png",
     axis: "v",
     line: 1024,
-    apex: [208, 541, 631, 719, 780, 830]
+    apex: [288, 325, 486, 525, 768, 781]
   },
   bag: {
     frames: Array.from({ length: 6 }, (_, i) => `assets/frames/bag-${i}.webp`),
