@@ -26,7 +26,9 @@ const GARMENTS = {
     axis: "h",
     line: 577,
     apex: [200, 350, 500, 650, 800, 950, 1100, 1250],
-    contentBox: [180, 312, 1120, 530]
+    contentBox: [180, 312, 1120, 530],
+    // 開口邊緣是程式化合成的，缺乏皮革厚度；加一圈暗部補深度感（原圖像素）
+    rimShadow: 16
   }
 };
 
@@ -302,6 +304,20 @@ function drawScene() {
   const win = frames.length > 8 ? 0.8 : 0.3;
   const bw = clamp((frac - (1 - win) / 2) / win, 0, 1);
   const blend = bw * bw * (3 - 2 * bw);
+  // 開口內緣的暗部：把幀影模糊壓暗後墊一層，正片會蓋掉大部分，
+  // 只在開口邊緣留下一圈柔和陰影，做出袋口／布料的厚度感
+  const rim = layout.garment.rimShadow;
+  if (rim && state.progress > 0.02 && typeof context.filter === "string") {
+    const grow = rim * layout.scale;
+    context.save();
+    context.filter = `blur(${Math.max(4, grow * 0.9)}px) brightness(0.3)`;
+    context.drawImage(
+      frames[i],
+      layout.offsetX - grow, layout.offsetY - grow,
+      dw + grow * 2, dh + grow * 2
+    );
+    context.restore();
+  }
   if (blend > 0.001 && frames[i + 1]) {
     context.drawImage(frames[i + 1], layout.offsetX, layout.offsetY, dw, dh);
     context.globalAlpha = 1 - blend;
