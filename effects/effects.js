@@ -231,12 +231,13 @@ window.EFFECTS = [
     title: "拉拉鍊",
     category: "身體動作",
     description: "拉開寫實牛仔褲或皮革包包的拉鍊，看看裡面這次藏著哪個奇怪世界",
-    instructions: "按住拉鍊頭沿拉鍊方向拖曳（牛仔褲上下、包包左右）；拉回閉合後，下次拉開會換內容。也可開啟攝影機，用拇指與食指捏合拉鍊頭拖曳",
-    tech: ["Canvas 2D", "AI 連續幀", "Pointer Events", "MediaPipe Hands", "getUserMedia", "GIF", "MJPEG"],
+    instructions: "按住拉鍊頭沿拉鍊方向拖曳（牛仔褲上下、包包左右），拖曳時會有拉鍊音效；拉回閉合後，下次拉開會換內容。也可開啟攝影機，用拇指與食指捏合拉鍊頭拖曳",
+    tech: ["Canvas 2D", "AI 連續幀", "Pointer Events", "Web Audio", "MediaPipe Hands", "getUserMedia", "GIF", "MJPEG"],
     principle: [
       "拉開過程用 AI 生成的連續幀（布料皺褶真實），開口內部是 alpha 透明；程式依拖曳進度在相鄰幀間交叉淡化，拉鍊頭貼著開口尖點跟手移動",
       "開口下方保留 DOM 圖片層，讓跨域 GIF 與 MJPEG 不經 Canvas 就能原生播放；連網來源逾時或失敗自動換源並退回本地圖包，GIF 會預抓下一張",
-      "手勢模式開啟時才載入攝影機與 MediaPipe Hands，以鏡像食指當游標，拇指食指捏合判定抓取"
+      "手勢模式開啟時才載入攝影機與 MediaPipe Hands，以鏡像食指當游標，拇指食指捏合判定抓取",
+      "音效是一段 CC0 真實拉鍊錄音剪成的 1 秒無縫循環，用 Web Audio 循環播放並讓 playbackRate 等於拖曳速度：慢拉聽得到一顆顆齒、快拉連成「滋」一聲，停手即淡出"
     ],
     requirements: ["滑鼠或觸控螢幕", "建議 Chrome / Edge", "動圖與監視器來源需網路，離線自動退回本地圖包", "手勢模式需攝影機，經 start.bat 或 HTTPS 開啟"],
     offline: true,

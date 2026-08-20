@@ -15,19 +15,15 @@ const GARMENTS = {
     line: 1024,
     apex: [288, 325, 486, 525, 768, 781],
     // 這條原圖 y 對齊畫面頂端：裁掉腰頭上緣的深色帶，褲身看起來更近更滿
-    focusTop: 100,
-    // 腰頭帶（原圖 y < 此值）不讓內容穿透：AI 幀在腰頭下方挖空過度，
-    // 用閉合幀的同區布料墊底，腰頭旁邊才不會破一個洞
-    waistBottom: 285,
-    // 全開時腰頭左右各往外分開的原圖像素數（中間 2×此值寬可穿透）
-    waistSplit: 95
+    focusTop: 100
   },
   bag: {
-    frames: Array.from({ length: 6 }, (_, i) => `assets/frames/bag-${i}.webp`),
+    frames: Array.from({ length: 6 }, (_, i) => `assets/frames/bagv2-${i}.webp`),
     sliderUrl: "assets/slider-jeans2.png",
     axis: "h",
-    line: 576,
-    apex: [146, 500, 850, 1200, 1550, 1860]
+    line: 577,
+    // 末幀止於 1745 而非開口實測的 1830：滑塊身體往右延伸，再往右會超出包身邊緣
+    apex: [194, 431, 847, 1171, 1549, 1745]
   }
 };
 
@@ -293,24 +289,6 @@ function drawScene() {
   }
   context.drawImage(frames[i], layout.offsetX, layout.offsetY, dw, dh);
   context.globalAlpha = 1;
-  const waist = layout.garment.waistBottom;
-  if (waist) {
-    // 腰頭帶墊底：AI 幀在腰頭下方挖空過度，用閉合幀的布料補回。
-    // 切成左右兩半隨進度往外分開，中間留縫穿透，兌現「拉開才彈開」又不破洞
-    const split = layout.garment.waistSplit * state.progress * layout.scale;
-    const line = layout.garment.line;
-    const wh = waist * layout.scale;
-    context.globalCompositeOperation = "destination-over";
-    context.drawImage(
-      frames[0], 0, 0, line, waist,
-      layout.offsetX - split, layout.offsetY, line * layout.scale, wh
-    );
-    context.drawImage(
-      frames[0], line, 0, layout.imageWidth - line, waist,
-      layout.lineScreen + split, layout.offsetY, (layout.imageWidth - line) * layout.scale, wh
-    );
-    context.globalCompositeOperation = "source-over";
-  }
   drawSlider(layout, tipScreen(layout));
 }
 
@@ -321,9 +299,67 @@ function requestDraw() {
   }
 }
 
+// 音效素材：BigSoundBank「Zip #7」(CC0 / Joseph SARDIN) 取穩定段做成 1 秒無縫循環。
+// 用循環取樣 + playbackRate 跟拉動速度走：慢拉聽得到一顆顆齒，快拉才連成「滋」一聲。
+// 取樣本身就是真實拉鍊拉完全長約 1 秒，所以 playbackRate 直接等於「進度/秒」。
+const zip = { ctx: null, bytes: null, buffer: null, node: null, gain: null, idleId: 0, lastAt: 0 };
+
+// 先抓檔案，但 AudioContext 等第一次拖曳（使用者手勢）才建，避免瀏覽器自動播放警告
+fetch("assets/zip-loop.wav")
+  .then((response) => response.arrayBuffer())
+  .then((bytes) => { zip.bytes = bytes; })
+  .catch(() => { /* 沒音效不影響互動，靜音就好 */ });
+
+function zipSoundStop() {
+  if (!zip.node) {
+    return;
+  }
+  const node = zip.node;
+  zip.node = null;
+  zip.gain.gain.setTargetAtTime(0, zip.ctx.currentTime, 0.015);
+  node.stop(zip.ctx.currentTime + 0.1);
+}
+
+// 進度每變動一次餵一次速度；停手 90ms 內沒有新變動就淡出（拉鍊不動就沒聲音）
+function zipSound(delta) {
+  if (!zip.ctx && zip.bytes) {
+    zip.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    zip.ctx.decodeAudioData(zip.bytes).then((buffer) => { zip.buffer = buffer; }).catch(() => {});
+    zip.bytes = null;
+  }
+  if (!zip.buffer) {
+    return;
+  }
+  const now = performance.now();
+  const speed = Math.abs(delta) / clamp((now - zip.lastAt) / 1000, 0.008, 0.1);
+  zip.lastAt = now;
+  window.clearTimeout(zip.idleId);
+  if (speed < 0.06) {
+    zipSoundStop();
+    return;
+  }
+  if (zip.ctx.state === "suspended") {
+    void zip.ctx.resume();
+  }
+  if (!zip.node) {
+    zip.gain = zip.ctx.createGain();
+    zip.gain.connect(zip.ctx.destination);
+    zip.node = zip.ctx.createBufferSource();
+    zip.node.buffer = zip.buffer;
+    zip.node.loop = true;
+    zip.node.connect(zip.gain);
+    // 起點隨機：連續拉好幾次不會每次都聽到同一段，少了罐頭味
+    zip.node.start(0, Math.random() * zip.buffer.duration);
+  }
+  zip.gain.gain.setTargetAtTime(0.9, zip.ctx.currentTime, 0.02);
+  zip.node.playbackRate.setTargetAtTime(clamp(speed, 0.35, 3), zip.ctx.currentTime, 0.03);
+  zip.idleId = window.setTimeout(zipSoundStop, 90);
+}
+
 function setProgress(progress) {
   const previous = state.progress;
   state.progress = clamp(progress, 0, 1);
+  zipSound(state.progress - previous);
   // 閉合瞬間就先換好下一批內容：畫面被布料蓋住時背後載圖，拉開前已就緒
   if (previous > 0.008 && state.progress <= 0.008) {
     void chooseContent();
