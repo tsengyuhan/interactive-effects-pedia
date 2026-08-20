@@ -20,13 +20,13 @@ const GARMENTS = {
     contentBox: [452, 60, 1144, 960]
   },
   bag: {
-    // 只用到第 7 幀：素材有 12 幀，但更大的開口會超出包身上下緣、吃掉提把
-    frames: Array.from({ length: 8 }, (_, i) => `assets/frames/bagv3-${i}.webp`),
+    // 12 幀完整走過包包的橫向拉鍊；提把座隨各自皮革片移動。
+    frames: Array.from({ length: 12 }, (_, i) => `assets/frames/bagv3-${i}.webp`),
     sliderUrl: "assets/slider-jeans2.png",
     axis: "h",
     line: 577,
-    apex: [200, 350, 500, 650, 800, 950, 1100, 1250],
-    contentBox: [180, 312, 1120, 530],
+    apex: [143, 303, 463, 622, 782, 942, 1102, 1262, 1422, 1581, 1741, 1901],
+    contentBox: [103, 311, 1838, 464],
     // 開口邊緣是程式化合成的，缺乏皮革厚度；加一圈暗部補深度感（原圖像素）
     rimShadow: 16
   }
