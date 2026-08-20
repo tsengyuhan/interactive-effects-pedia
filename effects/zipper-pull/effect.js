@@ -15,15 +15,18 @@ const GARMENTS = {
     line: 1024,
     apex: [288, 325, 486, 525, 768, 781],
     // 這條原圖 y 對齊畫面頂端：裁掉腰頭上緣的深色帶，褲身看起來更近更滿
-    focusTop: 100
+    focusTop: 100,
+    // 內容層只鋪這塊原圖區域（開口最大範圍外擴一點），避免內容被放大到糊掉
+    contentBox: [586, 81, 876, 720]
   },
   bag: {
-    // 只用到第 9 幀：素材有 12 幀，但 10 以後開口大到吃掉提把、包身變成空殼
-    frames: Array.from({ length: 10 }, (_, i) => `assets/frames/bagv3-${i}.webp`),
+    // 只用到第 7 幀：素材有 12 幀，但更大的開口會超出包身上下緣、吃掉提把
+    frames: Array.from({ length: 8 }, (_, i) => `assets/frames/bagv3-${i}.webp`),
     sliderUrl: "assets/slider-jeans2.png",
     axis: "h",
     line: 577,
-    apex: [200, 350, 500, 650, 800, 950, 1100, 1250, 1400, 1550]
+    apex: [200, 350, 500, 650, 800, 950, 1100, 1250],
+    contentBox: [180, 312, 1120, 530]
   }
 };
 
@@ -74,7 +77,6 @@ const state = {
 
 const style = document.createElement("style");
 style.textContent = `
-  .zipper-content-layer,
   .zipper-content-layer img,
   .zipper-canvas {
     position: absolute;
@@ -82,7 +84,8 @@ style.textContent = `
     width: 100%;
     height: 100%;
   }
-  .zipper-content-layer { overflow: hidden; background: #111; }
+  /* 內容層只鋪滿開口範圍（由 contentBox 定位），不放大到整個畫面，解析度才不會糊掉 */
+  .zipper-content-layer { position: absolute; overflow: hidden; background: #111; }
   .zipper-content-layer img {
     object-fit: cover;
     display: block;
@@ -258,9 +261,23 @@ function drawSlider(layout, tip) {
   context.restore();
 }
 
+// 內容層對齊開口所在的原圖區域，隨版面縮放同步
+function updateContentBox(layout) {
+  const box = layout.garment.contentBox;
+  if (!box) {
+    return;
+  }
+  const [bx, by, bw, bh] = box;
+  contentLayer.style.left = `${layout.offsetX + bx * layout.scale}px`;
+  contentLayer.style.top = `${layout.offsetY + by * layout.scale}px`;
+  contentLayer.style.width = `${bw * layout.scale}px`;
+  contentLayer.style.height = `${bh * layout.scale}px`;
+}
+
 function drawScene() {
   state.renderQueued = false;
   const layout = getLayout();
+  updateContentBox(layout);
   const frames = state.garmentImages.get(state.garment);
   if (!frames) {
     return;
