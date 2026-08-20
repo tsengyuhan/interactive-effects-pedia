@@ -5,8 +5,9 @@ const context = canvas.getContext("2d");
 const preview = document.createElement("video");
 const gestureCursor = document.createElement("div");
 
-// 幀序列（AI 生成）：0=閉合、1..5 逐步拉開，開口內部為 alpha 透明，
-// 程式依進度在相鄰幀間交叉淡化。apex=每幀開口尖點沿拉鍊軸的原圖座標（素材量測）。
+// 幀序列：0=閉合、之後逐步拉開，開口內部為 alpha 透明，程式依進度在相鄰幀間交叉淡化。
+// 牛仔褲的開口幀是 AI 生成後對齊；包包的是從閉合幀把那條真拉鍊拆開推導出來的。
+// apex=每幀開口尖點沿拉鍊軸的原圖座標（素材量測）。
 const GARMENTS = {
   jeans: {
     frames: Array.from({ length: 6 }, (_, i) => `assets/frames/jeansv3-${i}.webp`),

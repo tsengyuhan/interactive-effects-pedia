@@ -10,7 +10,7 @@
 
 ## 主要技術
 
-- AI 生成連續開拉鍊幀（WebP 含 alpha 開口），Canvas 2D 依進度交叉淡化
+- 連續開拉鍊幀（WebP 含 alpha 開口），Canvas 2D 依進度交叉淡化。牛仔褲的幀是 AI 生成後對齊；包包的 12 幀是從閉合底圖把那條真拉鍊拆開推導的，所以開口兩側是原圖的黃銅齒與皮革滾邊，提把也跟著皮革一起移動
 - Pointer Events（開口尖點逐段反查，拉鍊頭精準跟手）
 - MediaPipe Hands 與 getUserMedia（手勢模式）
 - DOM `<img>` 播放 GIF 與 MJPEG，GIF 背景預抓
