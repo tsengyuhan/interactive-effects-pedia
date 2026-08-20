@@ -18,12 +18,12 @@ const GARMENTS = {
     focusTop: 100
   },
   bag: {
-    frames: Array.from({ length: 6 }, (_, i) => `assets/frames/bagv2-${i}.webp`),
+    // 只用到第 9 幀：素材有 12 幀，但 10 以後開口大到吃掉提把、包身變成空殼
+    frames: Array.from({ length: 10 }, (_, i) => `assets/frames/bagv3-${i}.webp`),
     sliderUrl: "assets/slider-jeans2.png",
     axis: "h",
     line: 577,
-    // 末幀止於 1745 而非開口實測的 1830：滑塊身體往右延伸，再往右會超出包身邊緣
-    apex: [194, 431, 847, 1171, 1549, 1745]
+    apex: [200, 350, 500, 650, 800, 950, 1100, 1250, 1400, 1550]
   }
 };
 
@@ -280,8 +280,10 @@ function drawScene() {
   const f = clamp(state.progress, 0, 1) * (frames.length - 1);
   const i = Math.min(frames.length - 1, Math.floor(f));
   const frac = f - i;
-  // 溶接集中在幀間中段 30%：多數時間顯示單一清晰幀，快速溶接減少拖曳重影
-  const bw = clamp((frac - 0.35) / 0.3, 0, 1);
+  // 溶接窗依幀密度調整：幀多時相鄰差異小，放寬窗口讓拖曳更順；
+  // 幀少時收窄成中段快速溶接，避免長時間停在半透明重影上
+  const win = frames.length > 8 ? 0.8 : 0.3;
+  const bw = clamp((frac - (1 - win) / 2) / win, 0, 1);
   const blend = bw * bw * (3 - 2 * bw);
   if (blend > 0.001 && frames[i + 1]) {
     context.drawImage(frames[i + 1], layout.offsetX, layout.offsetY, dw, dh);
