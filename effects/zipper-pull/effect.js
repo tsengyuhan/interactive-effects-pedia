@@ -6,27 +6,28 @@ const preview = document.createElement("video");
 const gestureCursor = document.createElement("div");
 
 // 幀序列：0=閉合、之後逐步拉開，開口內部為 alpha 透明，程式依進度在相鄰幀間交叉淡化。
-// 牛仔褲的開口幀是 AI 生成後對齊；包包的是從閉合幀把那條真拉鍊拆開推導出來的。
+// 牛仔褲與包包的開口幀都是 AI 生成後，對齊閉合幀、依開口顏色去背轉 alpha 而來。
 // apex=每幀開口尖點沿拉鍊軸的原圖座標（素材量測）。
 const GARMENTS = {
   jeans: {
-    frames: Array.from({ length: 6 }, (_, i) => `assets/frames/jeansv3-${i}.webp`),
+    // v4：7 幀走完全長（原 3/8 號來源開口去背有瑕疵，已剔除）；前幾幀開口極窄，量測值忠實反映
+    frames: Array.from({ length: 7 }, (_, i) => `assets/frames/jeansv4-${i}.webp`),
     sliderUrl: "assets/slider-jeans2.png",
     axis: "v",
     line: 1024,
-    apex: [288, 325, 486, 525, 915, 993],
+    apex: [288, 539, 573, 709, 961, 983, 993],
     // 這條原圖 y 對齊畫面頂端：裁掉腰頭上緣的深色帶，褲身看起來更近更滿
     focusTop: 100,
     // 內容層只鋪這塊原圖區域（開口最大範圍外擴一點），避免內容被放大到糊掉
     contentBox: [452, 60, 1144, 960]
   },
   bag: {
-    // 12 幀完整走過包包的橫向拉鍊；提把座隨各自皮革片移動。
-    frames: Array.from({ length: 12 }, (_, i) => `assets/frames/bagv3-${i}.webp`),
+    // v4：9 幀走完包包的橫向拉鍊；提把座隨各自皮革片移動。
+    frames: Array.from({ length: 9 }, (_, i) => `assets/frames/bagv4-${i}.webp`),
     sliderUrl: "assets/slider-jeans2.png",
     axis: "h",
     line: 577,
-    apex: [143, 303, 463, 622, 782, 942, 1102, 1262, 1422, 1581, 1741, 1901],
+    apex: [143, 511, 606, 795, 1021, 1327, 1673, 1913, 1915],
     contentBox: [103, 311, 1838, 464],
     // 開口邊緣是程式化合成的，缺乏皮革厚度；加一圈暗部補深度感（原圖像素）
     rimShadow: 16
