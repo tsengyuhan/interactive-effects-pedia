@@ -6,3 +6,6 @@ Desktop.ini
 team/
 # 工人跑測試留下的產物
 test-results/
+
+# 牛仔褲幀的原始去背 PNG（約 25MB），只留本機；網頁載入的是轉好的 webp
+effects/zipper-pull/assets/new_jeans/
