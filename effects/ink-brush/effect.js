@@ -53,7 +53,7 @@
   strokeCanvas.style.opacity = String(state.density);
   inputCanvas.style.zIndex = "2";
   inputCanvas.style.touchAction = "none";
-  inputContext.canvas.setAttribute("aria-label", "水墨筆觸畫布");
+  inputContext.canvas.setAttribute("aria-label", t("水墨筆觸畫布"));
 
   shell.container.style.overflow = "hidden";
   shell.container.append(paperCanvas, inkCanvas, strokeCanvas, inputCanvas);

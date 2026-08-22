@@ -702,7 +702,7 @@ function drawTouchGlows() {
 }
 
 function drawPrompt() {
-  const text = "對著鏡頭伸出你的手";
+  const text = t("對著鏡頭伸出你的手");
   const y = state.height - 58;
   context.save();
   context.font = "600 18px 'Noto Sans TC', 'Microsoft JhengHei', sans-serif";
@@ -900,8 +900,8 @@ function openHandCapture() {
   const eraseSeg = document.createElement("button");
   const restoreSeg = document.createElement("button");
   eraseSeg.type = restoreSeg.type = "button";
-  eraseSeg.textContent = "🧽 擦除";
-  restoreSeg.textContent = "🖌 補回";
+  eraseSeg.textContent = t("🧽 擦除");
+  restoreSeg.textContent = t("🖌 補回");
   for (const b of [eraseSeg, restoreSeg]) {
     Object.assign(b.style, {
       padding: "8px 16px", border: "none", cursor: "pointer",
@@ -921,7 +921,7 @@ function openHandCapture() {
   seg.append(eraseSeg, restoreSeg);
 
   const resetBtn = document.createElement("button");
-  resetBtn.type = "button"; resetBtn.textContent = "重置";
+  resetBtn.type = "button"; resetBtn.textContent = t("重置");
   Object.assign(resetBtn.style, {
     padding: "8px 14px", borderRadius: "18px", border: "none", cursor: "pointer",
     font: "700 14px 'Noto Sans TC','Microsoft JhengHei',sans-serif",
@@ -929,7 +929,7 @@ function openHandCapture() {
   });
 
   const sizeLabel = document.createElement("span");
-  sizeLabel.textContent = "筆畫";
+  sizeLabel.textContent = t("筆畫");
   const sizeInput = document.createElement("input");
   sizeInput.type = "range"; sizeInput.min = "6"; sizeInput.max = "80"; sizeInput.step = "2";
   sizeInput.value = String(brushSize);
@@ -956,10 +956,10 @@ function openHandCapture() {
     });
     return b;
   };
-  const shoot = mkBtn("📸 拍下", true);
-  const cancel = mkBtn("取消", false);
-  const accept = mkBtn("✓ 用這隻", true);
-  const retake = mkBtn("重拍", false);
+  const shoot = mkBtn(t("📸 拍下"), true);
+  const cancel = mkBtn(t("取消"), false);
+  const accept = mkBtn(t("✓ 用這隻"), true);
+  const retake = mkBtn(t("重拍"), false);
 
   // 筆刷：currentShot.cut＝去背圖、currentShot.raw＝同框原始畫面（補回用）
   let currentShot = null;
@@ -1020,23 +1020,23 @@ function openHandCapture() {
   function toShoot() {
     currentShot = null;
     previewWrap.style.display = "none";
-    hint.textContent = "把手伸進畫面中央，手指張開，按「拍下」";
+    hint.textContent = t("把手伸進畫面中央，手指張開，按「拍下」");
     shoot.style.display = ""; cancel.style.display = "";
     accept.style.display = "none"; retake.style.display = "none";
   }
 
   shoot.addEventListener("click", () => {
     const hand = state.hands[0];
-    if (!hand) { hint.textContent = "沒偵測到手，把手伸進畫面再按拍下"; return; }
+    if (!hand) { hint.textContent = t("沒偵測到手，把手伸進畫面再按拍下"); return; }
     const shot = captureHand(hand);
-    if (!shot) { hint.textContent = "去背沒成功，調整光線或手的位置再試"; return; }
+    if (!shot) { hint.textContent = t("去背沒成功，調整光線或手的位置再試"); return; }
     currentShot = shot;
     editCanvas.width = shot.width;
     editCanvas.height = shot.height;
     ectx.clearRect(0, 0, shot.width, shot.height);
     ectx.drawImage(shot.cut, 0, 0);
     previewWrap.style.display = "flex";
-    hint.textContent = "🧽擦掉殘留、🖌補回缺角；滿意按「用這隻」，反悔按「取消」回原本";
+    hint.textContent = t("🧽擦掉殘留、🖌補回缺角；滿意按「用這隻」，反悔按「取消」回原本");
     shoot.style.display = "none";
     cancel.style.display = ""; // 預覽階段保留「取消」當反悔退路
     accept.style.display = ""; retake.style.display = "";

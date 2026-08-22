@@ -739,7 +739,7 @@ function drawFingertip(now) {
 }
 
 function drawPrompt() {
-  const text = "伸出食指停住半秒，指尖發光後畫出封閉形狀";
+  const text = t("伸出食指停住半秒，指尖發光後畫出封閉形狀");
   const y = state.height - 58;
   context.save();
   context.font = "600 18px 'Noto Sans TC', 'Microsoft JhengHei', sans-serif";

@@ -301,7 +301,7 @@
       return true;
     } catch (error) {
       releaseWebGLResources();
-      warnWebGL("WebGL 渲染模式初始化失敗，已回退 2D Canvas。", error);
+      warnWebGL(t("WebGL 渲染模式初始化失敗，已回退 2D Canvas。"), error);
       return false;
     }
   }
@@ -597,11 +597,11 @@
     const volumeAmount = normalize(audioState.db, state.threshold, 0) * 100;
     const pitchAmount = audioState.pitch ? normalize(audioState.pitch, 60, 1200) * 100 : 0;
     meter.innerHTML = [
-      `<div style="display:flex;justify-content:space-between;gap:12px"><span>音量</span><strong>${dbText}</strong></div>`,
+      `<div style="display:flex;justify-content:space-between;gap:12px"><span>${t("音量")}</span><strong>${dbText}</strong></div>`,
       `<div style="height:8px;margin:7px 0 12px;border-radius:999px;background:rgba(255,255,255,.14);overflow:hidden"><div style="height:100%;width:${volumeAmount}%;background:#7ee3d5"></div></div>`,
-      `<div style="display:flex;justify-content:space-between;gap:12px"><span>音高</span><strong>${pitchText}</strong></div>`,
+      `<div style="display:flex;justify-content:space-between;gap:12px"><span>${t("音高")}</span><strong>${pitchText}</strong></div>`,
       `<div style="height:8px;margin-top:7px;border-radius:999px;background:rgba(255,255,255,.14);overflow:hidden"><div style="height:100%;width:${pitchAmount}%;background:#d6e77a"></div></div>`,
-      `<div style="margin-top:10px;color:rgba(238,248,242,.78);font-size:12px">音量→大小，音高→高低位置</div>`
+      `<div style="margin-top:10px;color:rgba(238,248,242,.78);font-size:12px">${t("音量→大小，音高→高低位置")}</div>`
     ].join("");
   }
 

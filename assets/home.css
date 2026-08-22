@@ -68,6 +68,15 @@ body {
   line-height: 1.75;
 }
 
+.hero-tagline {
+  margin: 10px 0 0;
+  color: var(--accent);
+  font-family: "Playfair Display", Georgia, serif;
+  font-style: italic;
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+
 /* ── 篩選 chip ────────────────────────────── */
 .filter-bar {
   width: min(1180px, calc(100% - 48px));

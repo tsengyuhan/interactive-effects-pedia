@@ -40,7 +40,7 @@ const PENCIL_COLOR = "rgba(35, 32, 26, 0.42)";
 const STRIP = 2;
 const TEXT_FONT_NAME = "SketchPortraitIansui";
 const TEXT_FONT_STACK = `'${TEXT_FONT_NAME}', 'Microsoft JhengHei', 'PingFang TC', sans-serif`;
-const DEFAULT_TEXT = "光影在稿紙上慢慢長成人像";
+const DEFAULT_TEXT = t("光影在稿紙上慢慢長成人像");
 
 const state = {
   width: 1,
@@ -79,8 +79,8 @@ video.playsInline = true;
 video.style.display = "none";
 textInput.type = "text";
 textInput.value = state.text;
-textInput.placeholder = "輸入繁中文字，會循環填滿暗部格子";
-textInput.setAttribute("aria-label", "文字模式內容");
+textInput.placeholder = t("輸入繁中文字，會循環填滿暗部格子");
+textInput.setAttribute("aria-label", t("文字模式內容"));
 textInput.style.position = "absolute";
 textInput.style.left = "50%";
 textInput.style.top = "18px";

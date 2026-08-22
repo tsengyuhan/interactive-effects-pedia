@@ -11,13 +11,15 @@
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Noto+Serif+TC:wght@400;600;700&display=swap">
   <link rel="stylesheet" href="assets/home.css">
+  <script src="assets/i18n.js"></script>
 </head>
 
 <body>
   <section class="hero">
     <p class="hero-kicker"><em>INTERACTIA</em></p>
-    <h1 class="hero-title">網頁互動圖鑑</h1>
-    <p class="hero-lead">各種有趣互動的快速prototype，點即進入體驗，可參考說明與原始碼。</p>
+    <h1 class="hero-title" data-i18n>網頁互動圖鑑</h1>
+    <p class="hero-lead" data-i18n>各種有趣互動的快速prototype，點即進入體驗，可參考說明與原始碼。</p>
+    <p class="hero-tagline">Human ideas, AI-powered code.</p>
   </section>
 
   <nav class="filter-bar" id="filter-chips" aria-label="效果分類"></nav>
@@ -25,7 +27,7 @@
   <main id="card-grid"></main>
 
   <footer class="site-footer">
-    <span>Interactia 網頁互動圖鑑</span>
+    <span data-i18n>Interactia 網頁互動圖鑑</span>
     <span class="dot" aria-hidden="true">·</span>
     <span>Inspiration Library</span>
   </footer>

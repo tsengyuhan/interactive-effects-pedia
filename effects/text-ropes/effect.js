@@ -52,7 +52,7 @@ const state = {
   personMask: null,
   segmenter: null,
   ropes: new Map(),
-  text: "互動設計實驗",
+  text: t("互動設計實驗"),
   fontSize: 24,
   weight: 6,
   color: "#ffffff",
@@ -74,8 +74,8 @@ video.style.display = "none";
 
 textInput.type = "text";
 textInput.value = state.text;
-textInput.placeholder = "輸入文字…";
-textInput.setAttribute("aria-label", "輸入文字繩內容");
+textInput.placeholder = t("輸入文字…");
+textInput.setAttribute("aria-label", t("輸入文字繩內容"));
 textInput.style.position = "absolute";
 textInput.style.left = "50%";
 textInput.style.top = "18px";
@@ -716,7 +716,7 @@ function isOccluded(point, occluders) {
 }
 
 function drawTextRope(rope) {
-  const text = state.text.trim() || "互動設計實驗";
+  const text = state.text.trim() || t("互動設計實驗");
   const polyline = getPolylineSamples(rope.nodes);
   if (polyline.total < 4) {
     return;
@@ -759,7 +759,7 @@ function drawTextRope(rope) {
 }
 
 function drawPrompt() {
-  const text = "請面對鏡頭伸出手";
+  const text = t("請面對鏡頭伸出手");
   const y = state.height - 58;
   context.save();
   context.font = "600 18px 'Noto Sans TC', 'Microsoft JhengHei', sans-serif";

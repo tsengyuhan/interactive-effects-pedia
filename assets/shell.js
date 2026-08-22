@@ -85,7 +85,7 @@ Shell API 用法
     const heading = createElement("h3", "", title);
     const list = createElement("ul", "shell-list");
     for (const item of items) {
-      list.append(createElement("li", "", item));
+      list.append(createElement("li", "", t(item)));
     }
     setChildren(section, [heading, list]);
     return section;
@@ -99,13 +99,13 @@ Shell API 用法
     }
 
     const section = createElement("section", "shell-info-section");
-    const heading = createElement("h3", "shell-small-heading", "為什麼做這個？");
-    const text = why ? createElement("p", "shell-why", why) : null;
+    const heading = createElement("h3", "shell-small-heading", t("為什麼做這個？"));
+    const text = why ? createElement("p", "shell-why", t(why)) : null;
     const list = references.length > 0 ? createElement("ul", "shell-ref-list") : null;
 
     for (const ref of references) {
       const item = createElement("li");
-      const link = createElement("a", "", ref.label || ref.url);
+      const link = createElement("a", "", t(ref.label) || ref.url);
       link.href = ref.url;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
@@ -119,7 +119,7 @@ Shell API 用法
 
   function createBadge(effect) {
     const badge = createElement("span", "shell-offline-badge");
-    badge.textContent = effect.offline ? "完全離線" : "需網路";
+    badge.textContent = t(effect.offline ? "完全離線" : "需網路");
     if (!effect.offline && effect.offlineNote) {
       badge.title = effect.offlineNote;
     }
@@ -132,9 +132,9 @@ Shell API 用法
     overlay.setAttribute("aria-modal", "true");
 
     const panel = createElement("div", "shell-error-panel");
-    const title = createElement("h2", "", "發生錯誤");
-    const text = createElement("p", "", message);
-    const reload = createElement("button", "shell-primary-button", "重新整理");
+    const title = createElement("h2", "", t("發生錯誤"));
+    const text = createElement("p", "", t(message));
+    const reload = createElement("button", "shell-primary-button", t("重新整理"));
     reload.type = "button";
     reload.addEventListener("click", () => {
       location.reload();
@@ -151,36 +151,36 @@ Shell API 用法
     overlay.setAttribute("role", "status");
     const panel = createElement("div", "shell-loading-panel");
     const spinner = createElement("div", "shell-loading-spinner");
-    const text = createElement("p", "shell-loading-text", message || "載入中…");
+    const text = createElement("p", "shell-loading-text", t(message) || t("載入中…"));
     setChildren(panel, [spinner, text]);
     overlay.append(panel);
     return overlay;
   }
 
   function createShell(effect) {
-    document.title = `${effect.title}｜${APP_TITLE}`;
+    document.title = `${t(effect.title)}｜${t(APP_TITLE)}`;
     document.body.classList.add("shell-page");
 
     const container = createElement("div", "shell-container");
-    const back = createElement("a", "shell-back", "← 返回");
+    const back = createElement("a", "shell-back", t("← 返回"));
     back.href = "../../index.html";
 
     const actions = createElement("div", "shell-actions");
     const infoButton = createElement("button", "shell-icon-button", "ⓘ");
     infoButton.type = "button";
-    infoButton.setAttribute("aria-label", "開啟資訊面板");
+    infoButton.setAttribute("aria-label", t("開啟資訊面板"));
     infoButton.setAttribute("aria-expanded", "false");
-    actions.append(infoButton);
+    actions.append(infoButton, window.I18N.createSwitch());
 
-    const toast = createElement("div", "shell-toast", effect.instructions || "");
+    const toast = createElement("div", "shell-toast", t(effect.instructions) || "");
     toast.setAttribute("role", "status");
 
     const drawer = createElement("aside", "shell-info-panel");
-    drawer.setAttribute("aria-label", "效果資訊");
+    drawer.setAttribute("aria-label", t("效果資訊"));
     drawer.setAttribute("aria-hidden", "true");
 
     const paramsSection = createElement("section", "shell-param-section");
-    const paramsTitle = createElement("h3", "", "可調參數");
+    const paramsTitle = createElement("h3", "", t("可調參數"));
     const paramsMount = createElement("div", "shell-param-list");
     setChildren(paramsSection, [paramsTitle, paramsMount]);
     if (!effect.hasParams) {
@@ -188,27 +188,27 @@ Shell API 用法
     }
 
     const header = createElement("div", "shell-info-header");
-    const title = createElement("h2", "", effect.title);
+    const title = createElement("h2", "", t(effect.title));
     const close = createElement("button", "shell-close-button", "×");
     close.type = "button";
-    close.setAttribute("aria-label", "關閉資訊面板");
+    close.setAttribute("aria-label", t("關閉資訊面板"));
     setChildren(header, [title, close]);
 
-    const description = createElement("p", "shell-description", effect.description || "");
+    const description = createElement("p", "shell-description", t(effect.description) || "");
     const whySection = createWhySection(effect);
-    const instructions = createElement("p", "shell-instructions", effect.instructions || "");
+    const instructions = createElement("p", "shell-instructions", t(effect.instructions) || "");
 
     const tech = createElement("div", "shell-tech-list");
     for (const item of normalizeList(effect.tech)) {
-      tech.append(createElement("span", "shell-tech", item));
+      tech.append(createElement("span", "shell-tech", t(item)));
     }
 
-    const principle = createList("原理", normalizeList(effect.principle));
-    const requirements = createList("需求", normalizeList(effect.requirements));
+    const principle = createList(t("原理"), normalizeList(effect.principle));
+    const requirements = createList(t("需求"), normalizeList(effect.requirements));
     const status = createElement("div", "shell-status-row");
     status.append(createBadge(effect));
 
-    const source = createElement("a", "shell-source-link", "在 GitHub 查看原始碼");
+    const source = createElement("a", "shell-source-link", t("在 GitHub 查看原始碼"));
     source.href = `${REPO_EFFECTS_BASE}/${effect.id}`;
     source.target = "_blank";
     source.rel = "noopener noreferrer";
@@ -218,7 +218,7 @@ Shell API 用法
       header,
       description,
       whySection,
-      createElement("h3", "shell-small-heading", "操作說明"),
+      createElement("h3", "shell-small-heading", t("操作說明")),
       instructions,
       tech,
       principle,
@@ -237,7 +237,7 @@ Shell API 用法
       drawer.classList.toggle("is-open", open);
       drawer.setAttribute("aria-hidden", String(!open));
       infoButton.setAttribute("aria-expanded", String(open));
-      infoButton.setAttribute("aria-label", open ? "關閉資訊面板" : "開啟資訊面板");
+      infoButton.setAttribute("aria-label", t(open ? "關閉資訊面板" : "開啟資訊面板"));
       if (open) {
         window.clearTimeout(toastTimer);
         toast.classList.add("is-hidden");
@@ -257,7 +257,7 @@ Shell API 用法
     function addParam(config) {
       const item = createElement("label", "shell-param");
       const row = createElement("span", "shell-param-row");
-      const label = createElement("span", "shell-param-label", config.label || config.key || "參數");
+      const label = createElement("span", "shell-param-label", t(config.label) || config.key || t("參數"));
       let valueText = null;
       let control = null;
 
@@ -289,7 +289,7 @@ Shell API 用法
         for (const optionConfig of normalizeList(config.options)) {
           const option = document.createElement("option");
           option.value = optionConfig.value;
-          option.textContent = optionConfig.label || optionConfig.value;
+          option.textContent = t(optionConfig.label) || optionConfig.value;
           control.append(option);
         }
         control.value = config.value;
@@ -315,7 +315,7 @@ Shell API 用法
     }
 
     function addButton(config) {
-      const button = createElement("button", "shell-action-button", config.label || "執行");
+      const button = createElement("button", "shell-action-button", t(config.label) || t("執行"));
       button.type = "button";
       button.addEventListener("click", () => {
         if (typeof config.onClick === "function") {
@@ -363,7 +363,7 @@ Shell API 用法
       const effects = Array.isArray(window.EFFECTS) ? window.EFFECTS : [];
       const effect = effects.find((item) => item.id === id);
       if (!effect) {
-        document.title = `錯誤｜${APP_TITLE}`;
+        document.title = `${t("錯誤")}｜${t(APP_TITLE)}`;
         document.body.classList.add("shell-page");
         const container = createElement("div", "shell-container");
         document.body.append(container, createErrorOverlay(`登錄檔中找不到效果：${id}`));

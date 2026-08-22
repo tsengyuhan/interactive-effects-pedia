@@ -14,7 +14,7 @@ const anchorFollow = 0.62;
 const noseFollow = 0.85;
 const anchorVelocityBlend = 0.65;
 const anchorPrediction = 0.35;
-const defaultText = "文字繩連連看";
+const defaultText = t("文字繩連連看");
 const errorMessage =
   "請允許相機權限，並確認瀏覽器支援 getUserMedia。建議用 start.bat 啟動本機伺服器後再開啟效果。";
 
@@ -56,7 +56,7 @@ video.style.display = "none";
 textInput.type = "text";
 textInput.value = state.text;
 textInput.placeholder = defaultText;
-textInput.setAttribute("aria-label", "輸入要掛在線上的文字");
+textInput.setAttribute("aria-label", t("輸入要掛在線上的文字"));
 textInput.style.position = "absolute";
 textInput.style.left = "50%";
 textInput.style.top = "18px";
@@ -532,7 +532,7 @@ function drawTextRope(rope, flowing) {
       rope.flow = 0;
       rope.direction = Math.random() < 0.5 ? 1 : -1;
     }
-    const sample = context.measureText(text[0] || "字").width;
+    const sample = context.measureText(text[0] || t("字")).width;
     const spacing = Math.max(state.fontSize * 0.55, sample * state.spacing);
     rope.flow += spacing * state.flowSpeed * 0.05 * rope.direction;
     const len = text.length;
@@ -563,7 +563,7 @@ function drawTextRope(rope, flowing) {
 }
 
 function drawPrompt() {
-  const text = "站到鏡頭前，靠近朋友就會連成文字繩";
+  const text = t("站到鏡頭前，靠近朋友就會連成文字繩");
   const y = state.height - 58;
   context.save();
   context.font = "600 18px 'Noto Sans TC', 'Microsoft JhengHei', sans-serif";

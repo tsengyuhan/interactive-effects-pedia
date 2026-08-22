@@ -289,7 +289,7 @@ function drawFrame(rect, alpha) {
 }
 
 function drawPrompt(alpha) {
-  const text = "請雙手比出 L 字手勢";
+  const text = t("請雙手比出 L 字手勢");
   const y = state.height - 58;
   context.save();
   context.globalAlpha = alpha;

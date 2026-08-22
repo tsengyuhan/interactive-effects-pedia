@@ -8,11 +8,12 @@ let animating = false;
 /* ── 篩選 chip ────────────────────────────── */
 function renderChips() {
   chipsEl.innerHTML = "";
+  chipsEl.setAttribute("aria-label", t("效果分類"));
   for (const category of categories) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "chip";
-    chip.textContent = category;
+    chip.textContent = t(category);
     chip.classList.toggle("is-active", category === current);
     chip.setAttribute("aria-pressed", String(category === current));
     chip.addEventListener("click", () => {
@@ -37,7 +38,7 @@ function createCard(effect) {
 
   const image = document.createElement("img");
   image.src = `effects/${effect.id}/thumb.png`;
-  image.alt = `${effect.title}縮圖`;
+  image.alt = t(effect.title);
   image.loading = "lazy";
   image.addEventListener("error", () => {
     // 圖片可能尚未製作；隱藏破圖圖示，保留卡片辨識性
@@ -47,7 +48,7 @@ function createCard(effect) {
 
   const placeholder = document.createElement("div");
   placeholder.className = "thumb-placeholder";
-  placeholder.textContent = Array.from(effect.title || "?")[0] || "?";
+  placeholder.textContent = Array.from(t(effect.title) || "?")[0] || "?";
   thumb.append(image, placeholder);
 
   const body = document.createElement("div");
@@ -55,17 +56,17 @@ function createCard(effect) {
 
   const title = document.createElement("h2");
   title.className = "card-title";
-  title.textContent = effect.title;
+  title.textContent = t(effect.title);
 
   const meta = document.createElement("p");
   meta.className = "card-meta";
   const cat = document.createElement("span");
-  cat.textContent = effect.category;
+  cat.textContent = t(effect.category);
   const sep = document.createElement("span");
   sep.className = "sep";
   sep.textContent = "/";
   const state = document.createElement("span");
-  state.textContent = effect.offline ? "完全離線" : "需網路";
+  state.textContent = t(effect.offline ? "完全離線" : "需網路");
   if (!effect.offline && effect.offlineNote) {
     state.title = effect.offlineNote;
   }
@@ -81,7 +82,7 @@ function renderCards() {
   if (effects.length === 0) {
     const empty = document.createElement("p");
     empty.className = "empty-state";
-    empty.textContent = "尚無效果，敬請期待";
+    empty.textContent = t("尚無效果，敬請期待");
     grid.append(empty);
     return;
   }

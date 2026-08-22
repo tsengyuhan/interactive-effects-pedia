@@ -1,6 +1,6 @@
 # Interactia 網頁互動圖鑑
 
-Interactia 網頁互動圖鑑是一個純靜態、零建置、可離線執行的互動網頁效果展示網站。每個效果獨立放在 `effects/` 內，首頁與效果頁共用中央登錄檔 `effects/effects.js`。
+Interactia 網頁互動圖鑑是一個純靜態、零建置、可離線執行的互動網頁效果展示網站。每個效果獨立放在 `effects/` 內，首頁與效果頁共用中央登錄檔 `effects/effects.js`。介面支援中英雙語，右上角可切換。
 
 ## 線上網址
 
@@ -17,11 +17,13 @@ https://tsengyuhan.github.io/interactive-effects-pedia/
 1. 複製 `templates/新增效果需求.md`，填寫新效果需求。
 2. 依 `新增效果SOP.md` 建立效果資料夾、效果程式、登錄資料與縮圖。
 3. 新增第三方函式庫時必須下載到 `libs/`，禁用 CDN。
+4. 所有會顯示給使用者的中文都要在 `assets/i18n.js` 補英文；
+   跑 `node assets/i18n.test.js` 檢查有沒有漏翻。
 
 ## 目錄結構
 
 - `index.html`：首頁。
-- `assets/`：首頁與效果頁共用樣式、外殼程式。
+- `assets/`：首頁與效果頁共用樣式、外殼程式、中英字典 `i18n.js`。
 - `effects/`：各互動效果與中央登錄檔。
 - `libs/`：離線第三方函式庫與模型。
 - `templates/`：新增效果需求模板。
