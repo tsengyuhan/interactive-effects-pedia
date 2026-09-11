@@ -661,11 +661,15 @@ async function loadLocalContent(generation) {
 }
 
 function prefetchGif() {
-  // 在背景預抓下一張 GIF，下次要用時直接拿已載好的元素瞬間換圖
+  // GIF 大且慢，讓後續開合共用同一筆下載，避免丟掉重抓永遠追不上。
   const stamp = Date.now();
   const img = new Image();
+  const ready = new Promise((resolve) => {
+    img.onload = () => resolve(img.naturalWidth > 0);
+    img.onerror = () => resolve(false);
+  });
+  state.nextGif = { img, stamp, ready };
   img.src = `https://cataas.com/cat/gif?t=${stamp}`;
-  state.nextGif = { img, stamp };
 }
 
 function adoptContentImage(image, key) {
@@ -690,19 +694,27 @@ function adoptContentImage(image, key) {
 
 async function loadGifContent(generation) {
   const pre = state.nextGif;
-  state.nextGif = null;
-  prefetchGif();
-  if (pre && pre.img.complete && pre.img.naturalWidth > 0) {
-    if (generation !== state.contentGeneration) {
-      return false;
-    }
-    adoptContentImage(pre.img, `gif:${pre.stamp}`);
-    return true;
+  let timer;
+  const loaded = await Promise.race([
+    pre.ready,
+    new Promise((resolve) => {
+      timer = window.setTimeout(() => resolve(null), 12000);
+    })
+  ]);
+  window.clearTimeout(timer);
+  if (generation !== state.contentGeneration) {
+    return false;
   }
-  // 沒有預抓好的才現抓；cataas 大 GIF 常要 5–10 秒，換圖發生在閉合期間不影響體驗
-  const url = `https://cataas.com/cat/gif?t=${Date.now()}`;
-  const loaded = await tryContentUrl(url, `gif:${Date.now()}`, generation, 12000);
-  return loaded || loadLocalContent(generation);
+  if (loaded !== true) {
+    // 逾時只先顯示本地圖，保留下載供下一輪採用；確定失敗才重抓。
+    if (loaded === false) {
+      prefetchGif();
+    }
+    return loadLocalContent(generation);
+  }
+  adoptContentImage(pre.img, `gif:${pre.stamp}`);
+  prefetchGif();
+  return true;
 }
 
 async function loadCctvContent(generation) {
