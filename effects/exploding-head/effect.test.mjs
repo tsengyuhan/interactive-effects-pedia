@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import * as physics from './physics.mjs';
 import * as sceneAPI from './scene.mjs';
 import * as groundAPI from './ground.mjs';
+import * as roomAPI from './room.mjs';
 import { createBalloon, fillTexture } from './balloon.mjs';
 
 const source = fs.readFileSync(new URL('./effect.js', import.meta.url), 'utf8');
@@ -72,23 +73,23 @@ test('頂緣找頭髮、下巴曲線羽化，分離遮罩保留前景總 alpha',
 // 只在測試副本置換模型 import，正式頁面沒有偽造模式或測試入口。
 function harness(options = {}) {
   const events = {}, documentEvents = {}, elements = [], timers = new Map(), frames = new Map(),params=new Map();
-  const counts = { mask: 0, segmenter: 0, detector: 0, tracks: 0, infer: 0, detect: 0, balloon: 0 };
+  const counts = { mask: 0, segmenter: 0, detector: 0, tracks: 0, infer: 0, detect: 0, balloon: 0,balloonShadow:0 };
   let nextId = 1, now = 0, errors = [], faceCount = 1, detectedFrame,faceX=35,eyePoints=[{x:.4,y:.4},{x:.6,y:.4}];
   const renders=[];
   function element(tag) {
     const listeners = {};
     const el = { tag, style: {}, children: [], width: 100, height: 100,
-      currentTime: 0, videoWidth: 100, videoHeight: 100, readyState: 2, draws: [],
+      currentTime: 0, videoWidth: 100, videoHeight: 100, readyState: 2, draws: [],operations:[],
       append(...children) { this.children.push(...children); },
       setAttribute(key, value) { this[key] = value; },
       addEventListener(key, fn) { listeners[key] = fn; },
       click() { if (!this.disabled) listeners.click?.(); },
       play: async () => {}, pause() {},
       getContext() { return {
-        setTransform() {}, fillRect() { el.draws = []; }, clearRect() { el.draws = []; },
-        drawImage(...args) { el.draws.push(args); }, save() {}, restore() {}, translate() {}, scale() {}, rotate() {},transform() {},
+        setTransform() {}, fillRect() { el.draws = [];el.operations=[]; }, clearRect() { el.draws = []; },
+        drawImage(...args) { el.draws.push(args);el.operations.push({type:'image',source:args[0]}); }, save() {}, restore() {}, translate() {}, scale() {}, rotate() {},transform() {},
         createImageData(width, height) { return { width, height, data: new Uint8ClampedArray(width * height * 4) }; },
-        putImageData() {}, ellipse() {}, fill() {}, stroke() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, bezierCurveTo() {}, clip() {},
+        putImageData() {}, ellipse() {}, fill() {}, stroke() {el.operations.push({type:'stroke',color:this.strokeStyle});}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, bezierCurveTo() {}, clip() {},
         getImageData(x,y,width,height) { return {width,height,data:new Uint8ClampedArray(width*height*4).fill(255)}; },
         createLinearGradient() { return { addColorStop() {} }; }
       }; }
@@ -121,7 +122,8 @@ function harness(options = {}) {
   let extraButtons=0;
   const context = {
     ...physics,...sceneAPI,...groundAPI,modelAPI,fillTexture,
-    createStreetAssets() {return {street:element('img'),hydrant:element('img'),ready:options.assetFailed?Promise.reject(new Error('missing street')):Promise.resolve(),release(){counts.assets=(counts.assets||0)+1;}};},
+    drawBalloonShadow(...args) {counts.balloonShadow++;groundAPI.drawBalloonShadow(...args);},
+    createSceneAssets() {return {hydrant:element('img'),ready:options.assetFailed?Promise.reject(new Error('missing street')):Promise.resolve(),release(){counts.assets=(counts.assets||0)+1;}};},
     createBalloon(document) {
       if (options.noWebGL) throw new Error('WebGL unavailable');
       const canvas=document.createElement('canvas');
@@ -146,15 +148,16 @@ function harness(options = {}) {
   return {
     counts, timers, frames, errors, stream, segmenter, detector,params,renders,
     get pieces() { return vm.runInContext('particles.map(p=>({...p}))',sandbox); },
-    get sceneImages() {return vm.runInContext('[streetAssets?.street,streetAssets?.hydrant]',sandbox);},
+    get sceneImages() {return vm.runInContext('[sceneAssets?.hydrant]',sandbox);},
     get drawnImageSizes() {return elements.find(el=>el.className==='exploding-stage').draws.filter(args=>args.length===5).map(args=>args.slice(3));},
     get extraButtons() { return extraButtons; },
     get button() { return elements.find(el => el.className === 'exploding-pump'); },
     get status() { return elements.find(el => el.className === 'exploding-status').textContent; },
     get drawSources() { return elements.find(el => el.className === 'exploding-stage').draws.map(args=>args[0]); },
+    get drawOps() {return elements.find(el=>el.className==='exploding-stage').operations;},
     get ballCanvas() { return vm.runInContext('balloon?.canvas',sandbox); },
     get drawCount() { return elements.find(el => el.className === 'exploding-stage').draws.length; },
-    get state() { return vm.runInContext('({ ...state, tracked, ready, stopped, maxScale, fisheye, resetElapsed, tether:tether?.points.map(p=>({...p})), swing:{...swing}, particles: particles.length })', sandbox); },
+    get state() { return vm.runInContext('({ ...state, tracked, ready, stopped, maxScale, fisheye, ropeScale, resetElapsed, tether:tether?.points.map(p=>({...p})), swing:{...swing}, particles: particles.length })', sandbox); },
     get pose() {return vm.runInContext('lastPose && {...lastPose}',sandbox);},
     get scene() { return vm.runInContext('JSON.parse(JSON.stringify(scene))', sandbox); },
     get layout() { return vm.runInContext('layout()', sandbox); },
@@ -306,7 +309,7 @@ test('效果內中文 UI（含動態狀態及 shell 標籤）都有英文翻譯'
 
 test('效果依賴僅引用存在的本地檔案', () => {
   assert.doesNotMatch(source, /https?:\/\//);
-  for (const path of ['./physics.mjs', './balloon.mjs', './scene.mjs','./ground.mjs','./street.png','./hydrant.png', '../../libs/mediapipe/vision_bundle.mjs', '../../libs/mediapipe/selfie_segmenter.tflite', '../../libs/mediapipe/blaze_face_short_range.tflite', '../../libs/mediapipe/wasm/vision_wasm_internal.wasm', '../../libs/mediapipe/wasm/vision_wasm_nosimd_internal.wasm']) {
+  for (const path of ['./physics.mjs', './balloon.mjs', './scene.mjs','./ground.mjs','./room.mjs','./hydrant.png', '../../libs/mediapipe/vision_bundle.mjs', '../../libs/mediapipe/selfie_segmenter.tflite', '../../libs/mediapipe/blaze_face_short_range.tflite', '../../libs/mediapipe/wasm/vision_wasm_internal.wasm', '../../libs/mediapipe/wasm/vision_wasm_nosimd_internal.wasm']) {
     assert.ok(fs.existsSync(new URL(path, import.meta.url)), path);
   }
 });
@@ -440,8 +443,7 @@ test('近景構圖放大消防栓與球，預設爆炸尺寸保留可見範圍',
       assert.ok(cx-rx>0 && cx+rx<width);
       assert.ok(Math.abs(tether.points.at(-1).x-view.anchor.x)<view.ropeLength*.12);
       assert.ok(pose.y<view.hydrantGround-view.hydrantHeight-2);
-      const curbTop=view.image.y+(438+(698-438)*.5)*view.image.scale;
-      assert.ok(view.hydrantGround<curbTop-5);
+      assert.equal(view.hydrantGround,view.ground);
     }
   }
 });
@@ -656,7 +658,7 @@ test('實心球貼圖以有效前景RGB補滿所有alpha，不把背景綠色帶
 
 
 
-test('主畫布只畫本地街景、消防栓與球面碎片，從不輸出相機或人像圖層', async () => {
+test('主畫布只用消防栓與球面碎片圖片，沒有街景、相機或人像圖層', async () => {
   const page=harness();await settle();page.step();
   const foreground=()=>page.drawSources.filter(source=>!page.sceneImages.includes(source));
   assert.deepEqual(foreground(),[page.ballCanvas]);
@@ -664,7 +666,9 @@ test('主畫布只畫本地街景、消防栓與球面碎片，從不輸出相�
   page.faces(1);page.step();for(let i=0;i<12;i++)page.button.click();
   for(let i=0;i<120&&!page.state.exploded;i++)page.step();
   assert.equal(foreground().length,32);assert.ok(foreground().every(source=>source===foreground()[0]));
-  assert.notEqual(foreground()[0],page.ballCanvas);page.leave();
+  assert.notEqual(foreground()[0],page.ballCanvas);
+  const shadows=page.counts.balloonShadow;for(let i=0;i<10;i++)page.step();assert.equal(page.counts.balloonShadow,shadows);
+  page.leave();
 });
 
 test('繩索固定消防栓端點、維持段長與有限值，移頭帶動受限甩動', () => {
@@ -725,18 +729,20 @@ test('共享地面投影深度縮小，空中位置反推再投影與爆炸前�
   assert.deepEqual(groundAPI.projectGround(view,0,0),{x:view.x,y:view.ground,scale:1});
 });
 
-test('氣球影跟隨旋轉中心、位置與大小，高處更淡且柔化', () => {
-  const view=sceneAPI.sceneLayout(1280,665),pose={x:view.x,y:view.ground-100,width:150,height:170,angle:0};
+test('氣球輪廓投影隨位置大小高度角度改變，預設跨牆地且距離控制柔化', () => {
+  const view=sceneAPI.sceneLayout(1280,665),pose=sceneAPI.scenePose(view,sceneAPI.createTether(view),physics.resetState());
   const shadow=groundAPI.balloonShadow(view,pose);
-  const moved=groundAPI.balloonShadow(view,{...pose,x:pose.x+45});assert.ok(moved.x>shadow.x);
-  const rotated=groundAPI.balloonShadow(view,{...pose,angle:.3});assert.ok(rotated.x>shadow.x);
-  const high=groundAPI.balloonShadow(view,{...pose,y:pose.y-100});
-  assert.ok(high.opacity<shadow.opacity && high.blur>shadow.blur);
-  const big=groundAPI.balloonShadow(view,{...pose,width:220});assert.ok(big.rx>shadow.rx);
-  assert.ok(shadow.x>pose.x && shadow.y>view.ground);
+  assert.deepEqual(shadow.map(s=>s.surface),['floor','right']);
+  const center=shadows=>shadows.flatMap(s=>s.points).reduce((sum,p,i,points)=>sum+p.x/points.length,0);
+  assert.ok(center(groundAPI.balloonShadow(view,{...pose,x:pose.x+45}))>center(shadow));
+  assert.ok(center(groundAPI.balloonShadow(view,{...pose,angle:.3}))>center(shadow));
+  for(const change of [{width:pose.width*1.5},{y:pose.y-60}]) assert.notDeepEqual(groundAPI.balloonShadow(view,{...pose,...change}),shadow);
+  for(const s of shadow) {
+    assert.equal(s.opacity,.30/(1+s.distance*.30));assert.equal(s.blur,(.7+s.distance*1.4)*view.unit/350);
+  }
 });
 
-test('32片分散於道路，30/60/120fps落地微彈後停止且不穿地', () => {
+test('32片分散於地板，30/60/120fps落地微彈後停止且不穿地', () => {
   const view=sceneAPI.sceneLayout(1280,665);
   const run=fps=>Array.from({length:32},(_,i)=>{
     const initial={x:view.x+(i-16)*3,y:view.ground-200-(i%5)*25,width:200,
@@ -775,9 +781,9 @@ test('爆後長時間仍保留所有落片，重置一次清除', async () => {
   page.reset();assert.equal(page.state.particles,32);for(let i=0;i<130;i++)page.step();assert.equal(page.state.particles,0);page.leave();
 });
 
-test('街景圖失敗會清楚提示並釋放GPU及相機，正常離頁也釋放素材', async () => {
+test('消防栓圖失敗會清楚提示並釋放GPU及相機，正常離頁也釋放素材', async () => {
   const broken=harness({assetFailed:true});await settle();
-  assert.match(broken.errors[0],/街景素材載入失敗/);assert.equal(broken.state.stopped,true);
+  assert.match(broken.errors[0],/消防栓素材載入失敗/);assert.equal(broken.state.stopped,true);
   assert.equal(broken.counts.assets,1);assert.equal(broken.counts.balloon,1);assert.ok(broken.counts.tracks>=1);
   const normal=harness();await settle();normal.leave();assert.equal(normal.counts.assets,1);
 });
@@ -785,28 +791,110 @@ test('街景圖失敗會清楚提示並釋放GPU及相機，正常離頁也釋�
 test('本地場景圖載入失敗、完成及途中釋放都不保留事件或來源', async () => {
   for(const mode of ['ready','error','release']) {
     const images=[],document={createElement(){const image={removeAttribute(name){delete this[name];}};images.push(image);return image;}};
-    const assets=sceneAPI.createStreetAssets(document),completion=assets.ready.catch(error=>error);
-    if(mode==='ready') {images.forEach(image=>image.onload());await completion;assert.equal(assets.street,images[0]);assert.equal(assets.hydrant,images[1]);}
+    const assets=sceneAPI.createSceneAssets(document),completion=assets.ready.catch(error=>error);
+    if(mode==='ready') {images.forEach(image=>image.onload());await completion;assert.equal(assets.hydrant,images[0]);assert.equal(images.length,1);assert.equal(images[0].src,'./hydrant.png');}
     if(mode==='error') {images[0].onerror();assert.ok(await completion instanceof Error);}
     assets.release();assert.ok(await completion===undefined || mode!=='ready');
-    assert.equal(assets.street,null);assert.equal(assets.hydrant,null);
+    assert.equal(assets.hydrant,null);
     assert.ok(images.every(image=>image.onload===null && image.onerror===null && image.src===undefined));
   }
 });
 
-test('街景等比覆蓋，栓腳綁點及路緣同源校準；落片平面始終在柏油側', () => {
+test('房間與地板共用投影，栓腳綁點校準且落片位置在有限地板內', () => {
   for(const [width,height] of [[1280,665],[390,844],[844,390]]) {
-    const view=sceneAPI.sceneLayout(width,height),image=view.image;
-    assert.ok(image.x<=0 && image.y<=0);
-    assert.ok(image.x+1536*image.scale>=width-.001 && image.y+1024*image.scale>=height-.001);
-    assert.equal(view.x,image.x+768*image.scale);assert.equal(view.hydrantGround,image.y+552*image.scale);
+    const view=sceneAPI.sceneLayout(width,height);
+    assert.equal(view.hydrantGround,view.ground);
     assert.equal(view.anchor.x,view.x+(775-516)*view.hydrantScale);
     assert.equal(view.anchor.y,view.hydrantGround+(635-1460)*view.hydrantScale);
-    const a=view.road[0],b=view.road[1];
-    for(const z of [view.nearDepth,0,view.farDepth]) for(const x of [-1,0,1]) {
+    for(const z of [view.nearDepth,0,view.farDepth]) for(const x of [-roomAPI.roomHalfWidth(z)+.1,0,roomAPI.roomHalfWidth(z)-.1]) {
       const p=groundAPI.projectGround(view,x,z);
-      const curb=a.y+(p.x-a.x)*(b.y-a.y)/(b.x-a.x);
-      assert.ok(p.y>curb+5,`${width}×${height}: 地面位置不得跨過路緣`);
+      assert.deepEqual(p,roomAPI.projectPoint(view,x,z));
+      const hit=roomAPI.rayHit(view,{x,z,height:.1},{x:0,z:0,height:-1});assert.equal(hit.surface,'floor');
     }
   }
+});
+
+test('有限兩牆與地板射線取最近正命中，平行、開口與面外不命中', () => {
+  const view=sceneAPI.sceneLayout(1280,665);
+  assert.deepEqual(roomAPI.roomSurfaces(view).map(s=>s.id),['floor','left','right']);
+  const hit=roomAPI.rayHit(view,{x:0,z:0,height:.2},{x:.1,z:.1,height:-1});
+  assert.equal(hit.surface,'floor');assert.ok(Math.abs(hit.t-.2)<1e-10);
+  const wall=roomAPI.rayHit(view,{x:0,z:0,height:1},{x:1,z:.5,height:0});assert.equal(wall.surface,'right');
+  const entering=roomAPI.rayHit(view,{x:-3,z:-1,height:1},{x:1,z:0,height:0});assert.equal(entering.surface,'left');
+  assert.equal(roomAPI.rayHit(view,{x:0,z:0,height:1},{x:0,z:-1,height:0}),null);
+  assert.equal(roomAPI.rayHit(view,{x:0,z:0,height:3},{x:0,z:1,height:0}),null);
+  assert.equal(roomAPI.rayHit(view,{x:0,z:0,height:1},{x:0,z:0,height:0}),null);
+});
+
+test('球影由同一光錐裁到有限接收面，接縫連續且沒有重複的較遠命中', () => {
+  for(const [width,height] of [[1280,665],[390,580],[844,390]]) {
+    const view=sceneAPI.sceneLayout(width,height),pose=sceneAPI.scenePose(view,sceneAPI.createTether(view),{scale:1.6,pressure:.5,velocity:0});
+    const shadows=groundAPI.balloonShadow(view,pose);assert.equal(shadows.length,2);
+    const floor=shadows.find(s=>s.surface==='floor'),wall=shadows.find(s=>s.surface!=='floor');
+    assert.ok(floor && wall);
+    for(const shadow of shadows)for(const point of shadow.world) {
+      const light=roomAPI.ROOM_LIGHT,direction={x:point.x-light.x,z:point.z-light.z,height:point.height-light.height};
+      const hit=roomAPI.rayHit(view,light,direction);assert.ok(hit);assert.ok(Math.abs(hit.t-1)<1e-7);
+    }
+    const seam=floor.world.filter(p=>Math.abs(p.z+Math.abs(p.x)*roomAPI.WALL_SLOPE-roomAPI.ROOM_BACK)<1e-7);
+    assert.ok(seam.length>=2);
+    for(const point of seam)assert.ok(wall.world.some(p=>Math.hypot(p.x-point.x,p.z-point.z,p.height-point.height)<1e-7));
+  }
+});
+
+test('主色自動產生不同牆面與暖奶油地板，黑白灰保持可辨且一致', () => {
+  for(const color of ['#63b7ac','#ef8c76','#808080','#000000','#ffffff']) {
+    const palette=roomAPI.roomPalette(color);assert.deepEqual(palette,roomAPI.roomPalette(color));
+    assert.ok(palette.right.l>palette.left.l+.1);assert.ok(palette.floor.l>palette.left.l);
+    assert.equal(palette.floor.h,45);assert.ok(Object.values(palette).every(c=>Object.values(c).every(Number.isFinite)));
+    if(['#808080','#000000','#ffffff'].includes(color))assert.ok(Object.values(palette).every(c=>c.s===0));
+  }
+});
+
+test('兩面牆與有限地板填滿四種視窗，中央牆角與斜地腳同源', () => {
+  const inside=(points,x,y)=>{
+    let result=false;
+    for(let i=0,j=points.length-1;i<points.length;j=i++) {
+      const a=points[i],b=points[j];
+      if((a.y>y)!==(b.y>y) && x<(b.x-a.x)*(y-a.y)/(b.y-a.y)+a.x)result=!result;
+    }
+    return result;
+  };
+  for(const [w,h] of [[1280,665],[1280,609],[390,580],[844,390]]) {
+    const view=sceneAPI.sceneLayout(w,h),polygons=roomAPI.roomSurfaces(view).map(surface=>surface.points.map(p=>roomAPI.projectPoint(view,p.x,p.z,p.height)));
+    for(const x of [1,w*.2,w*.499,w*.8,w-1])for(const y of [1,h*.3,h*.7,h-1])assert.equal(polygons.filter(points=>inside(points,x,y)).length,1);
+    const corner=roomAPI.projectPoint(view,0,roomAPI.ROOM_BACK,0);
+    assert.equal(corner.x,w/2);assert.ok(corner.y<view.ground-20);
+  }
+});
+
+test('繩長倍率重新約束原節點並保留氣量、尺寸、落地門檻與風吹階段', async () => {
+  const page=harness();await settle();page.step();for(let i=0;i<6;i++)page.button.click();for(let i=0;i<90;i++)page.step();
+  const pressure=page.state.pressure,scale=page.state.scale,width=page.balloonWidth,hydrant=page.scene.hydrantHeight;
+  for(const multiplier of [.6,1.5,1]) {
+    page.param('ropeScale',multiplier);page.param('background','#ef8c76');
+    assert.equal(page.state.pressure,pressure);assert.equal(page.state.scale,scale);assert.equal(page.balloonWidth,width);
+    assert.equal(page.scene.hydrantHeight,hydrant);assert.equal(page.scene.ropeLength,page.scene.baseRopeLength*multiplier);
+    const points=page.state.tether,total=points.slice(1).reduce((sum,p,i)=>sum+Math.hypot(p.x-points[i].x,p.y-points[i].y),0);
+    assert.ok(Math.abs(total-page.scene.ropeLength)<page.scene.ropeLength*.03);
+  }
+  for(let i=0;i<6;i++)page.button.click();for(let i=0;i<120&&!page.state.exploded;i++)page.step();
+  page.param('ropeScale',.6);assert.equal(page.state.particles,32);assert.equal(page.canReset,false);
+  landAll(page);page.param('ropeScale',1.5);assert.equal(page.canReset,true);assert.equal(page.state.particles,32);
+  page.button.click();page.step(500);const elapsed=page.state.resetElapsed;
+  page.param('ropeScale',.6);page.resize(390,580);assert.equal(page.state.resetElapsed,elapsed);
+  assert.equal(page.state.particles,32);assert.equal(page.scene.ropeLength,page.scene.baseRopeLength*.6);
+  page.step(1500);assert.equal(page.state.resetElapsed,null);assert.equal(page.state.pressure,0);page.leave();
+});
+
+test('短繩左右歪頭時消防栓先畫，完整繩球同在前景且調色不改球材質', async () => {
+  const page=harness();await settle();page.step();page.param('ropeScale',.6);
+  for(const angle of [-.3,.3]) {
+    page.eyes([{x:.4,y:.4-Math.tan(angle)*.1},{x:.6,y:.4+Math.tan(angle)*.1}]);
+    for(let i=0;i<60;i++)page.step();
+    const ops=page.drawOps,hydrant=ops.findIndex(o=>o.source===page.sceneImages[0]),rope=ops.findIndex(o=>o.type==='stroke'&&o.color==='#776a55'),ball=ops.findIndex(o=>o.source===page.ballCanvas);
+    assert.ok(hydrant>=0 && rope>hydrant && ball>rope);
+    assert.deepEqual(page.renders.at(-1),[page.state.pressure,page.state.fisheye]);
+  }
+  page.leave();
 });

@@ -1,5 +1,5 @@
 import { MAX_SCALE, resetState, pump, advance, estimateHead, fractureBalloon, resetSwing, trackSwing, trackRoll, advanceSwing } from './physics.mjs';
-import { createStreetAssets,sceneLayout,createTether,advanceTether,scenePose,drawStreet,drawHydrant,drawTether } from './scene.mjs';
+import { createSceneAssets,sceneLayout,createTether,setRopeLength,advanceTether,scenePose,drawRoomScene,drawHydrant,drawTether } from './scene.mjs';
 import { placeShard,advanceGroundShard,advanceWindShard,shardPose,clipRoad,drawBalloonShadow,drawShardShadow } from './ground.mjs';
 import { createBalloon } from './balloon.mjs';
 
@@ -21,7 +21,7 @@ function surface() {
 const frame=surface(),headLayer=surface(),headMask=surface(),debris=surface();
 let headPixels;
 let state = resetState();
-let background = '#dcebe3', speed = 1, maxScale=MAX_SCALE, fisheye=.25;
+let background = '#63b7ac', speed = 1, maxScale=MAX_SCALE, fisheye=.25, ropeScale=1;
 let resetElapsed=null;
 let swing=resetSwing();
 let stream, segmenter, detector, audio;
@@ -30,7 +30,7 @@ let raf = 0, lastTime = 0, lastVideoTime = -1, lastFrameAt = 0;
 let width = 1, height = 1, dpr = 1, cameraTimer = 0, startupTimer = 0;
 let particles = [], lastPose = null, statusKey = '';
 let scene=null,tether=null,hasTexture=false,cameraWidth=0,cameraHeight=0;
-let balloon,streetAssets;
+let balloon,sceneAssets;
 
 const controls = document.createElement('div');
 controls.className = 'exploding-controls';
@@ -76,12 +76,14 @@ function updateUI() {
   if (key !== statusKey) { status.textContent = t(key); statusKey = key; }
 }
 
-shell.addParam({ type: 'color', key: 'background', label: '背景顏色', value: background,
+shell.addParam({ type: 'color', key: 'background', label: '主色調', value: background,
   onChange: value => { background = value; draw(performance.now()); } });
 shell.addParam({ type: 'range', key: 'speed', label: '充氣速度', min: 0.5, max: 2, step: 0.25, value: speed,
   onChange: value => { speed = value; } });
 shell.addParam({type:'range',key:'fisheye',label:'魚眼程度',min:0,max:1,step:.05,value:fisheye,
   onChange:value=>{fisheye=Number(value);draw(performance.now());}});
+shell.addParam({type:'range',key:'ropeScale',label:'繩長（倍）',min:.6,max:1.5,step:.05,value:ropeScale,
+  onChange:value=>{ropeScale=Number(value);if(scene)setRopeLength(scene,tether,ropeScale);draw(performance.now());}});
 shell.addParam({ type:'range',key:'maxScale',label:'氣球最大尺寸（倍）',min:1.5,max:4,step:.05,value:maxScale,
   onChange:value=>{
     maxScale=Number(value);
@@ -153,7 +155,7 @@ function resize() {
   height = shell.container.clientHeight || window.innerHeight;
   dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
-  scene=sceneLayout(width,height); tether=createTether(scene);
+  scene=sceneLayout(width,height);setRopeLength(scene,null,ropeScale);tether=createTether(scene);
   draw(performance.now());
 }
 
@@ -235,15 +237,15 @@ function draw(now) {
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.fillStyle=background;ctx.fillRect(0,0,width,height);
   if(!scene || !tether) return;
-  drawStreet(ctx,scene,streetAssets,background);
+  drawRoomScene(ctx,scene,sceneAssets,background);
   const visible=hasTexture && !state.exploded && !stopped;
   lastPose=visible?headPose():null;
   if(lastPose) drawBalloonShadow(ctx,scene,lastPose);
   for(const piece of particles) drawShardShadow(ctx,scene,piece);
   const ordered=[...particles].sort((a,b)=>b.gz-a.gz);
   for(const piece of ordered) if(piece.gz>=0) drawPiece(piece);
+  drawHydrant(ctx,scene,sceneAssets);
   drawTether(ctx,tether,scene,lastPose);
-  drawHydrant(ctx,scene,streetAssets);
   if(lastPose) {
     ctx.save();ctx.translate(lastPose.x,lastPose.y);ctx.rotate(lastPose.angle);
     ctx.drawImage(balloon.render(state.pressure,fisheye),-lastPose.width/2,-lastPose.height,lastPose.width,lastPose.height);
@@ -316,7 +318,7 @@ function release() {
   if (audio) { try { void audio.close().catch(() => {}); } catch {} audio = null; }
   particles = []; resetElapsed=null; headPixels = null; hasTexture=false;
   balloon?.release(); balloon = null;
-  streetAssets?.release();streetAssets=null;
+  sceneAssets?.release();sceneAssets=null;
   for (const layer of [frame, headLayer, headMask, debris]) layer.canvas.width = layer.canvas.height = 1;
   window.removeEventListener('resize', resize);
   document.removeEventListener('visibilitychange', visibility);
@@ -372,8 +374,8 @@ async function start() {
   shell.showLoading(t('正在準備攝影機與本地模型…'));
   try { balloon = createBalloon(document); }
   catch (error) { fail(error, '無法建立 3D 氣球，請啟用瀏覽器硬體加速，並使用 Chrome／Edge 重新整理。'); return; }
-  streetAssets=createStreetAssets(document);
-  const assetsReady=streetAssets.ready.catch(error=>fail(error,'街景素材載入失敗，請確認街景及消防栓圖片完整後重新整理。'));
+  sceneAssets=createSceneAssets(document);
+  const assetsReady=sceneAssets.ready.catch(error=>fail(error,'消防栓素材載入失敗，請確認圖片完整後重新整理。'));
   try { await camera(); }
   catch (error) {
     fail(error, '無法開啟攝影機，請允許攝影機權限、關閉占用相機的程式，再經 start.bat 或 HTTPS 開啟並重新整理。');

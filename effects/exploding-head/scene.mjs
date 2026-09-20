@@ -1,42 +1,47 @@
 import { clamp } from './physics.mjs';
+import { projectPoint,roomSurfaces,roomHalfWidth,drawRoom,drawRoomShadow } from './room.mjs';
 
-export function createStreetAssets(document) {
+export function createSceneAssets(document) {
   let released=false;
   const pending=[],images=[],timers=[];
   const load=path=>new Promise((resolve,reject)=>{
     const image=document.createElement('img');images.push(image);pending.push(reject);
-    const timer=setTimeout(()=>reject(new Error(`Street image timed out: ${path}`)),15000);timers.push(timer);
+    const timer=setTimeout(()=>reject(new Error(`Scene image timed out: ${path}`)),15000);timers.push(timer);
     image.onload=()=>{clearTimeout(timer);if(!released)resolve(image);};
-    image.onerror=()=>{clearTimeout(timer);reject(new Error(`Street image unavailable: ${path}`));};
+    image.onerror=()=>{clearTimeout(timer);reject(new Error(`Scene image unavailable: ${path}`));};
     image.src=path;
   });
-  const assets={street:null,hydrant:null,ready:null,release(){
+  const assets={hydrant:null,ready:null,release(){
     if(released)return;released=true;timers.forEach(clearTimeout);
     images.forEach(image=>{image.onload=image.onerror=null;image.removeAttribute('src');});
-    pending.forEach(reject=>reject(new Error('Street images released')));
-    assets.street=assets.hydrant=null;
+    pending.forEach(reject=>reject(new Error('Scene images released')));
+    assets.hydrant=null;
   }};
-  assets.ready=Promise.all([load('./street.png'),load('./hydrant.png')]).then(([street,hydrant])=>{
-    if(!released){assets.street=street;assets.hydrant=hydrant;}
-  });
+  assets.ready=load('./hydrant.png').then(hydrant=>{if(!released)assets.hydrant=hydrant;});
   return assets;
 }
 
 // 構圖只依視窗，鏡頭距離、氣量與最大尺寸都不改變消防栓大小。
 export function sceneLayout(width,height) {
   const span=Math.max(100,height-(height<500?150:178)-74),unit=Math.min(span,width*1.18);
-  const imageScale=Math.max(width/1536,height/1024)*1.6;
-  const imageX=(width-1536*imageScale)/2;
-  const imageY=clamp(height-(height<500?110:145)-630*imageScale,height-1024*imageScale,0);
-  // 拉近同一街景，栓腳移到路緣內側，讓柏油前景仍容得下落片。
-  const x=imageX+768*imageScale,hydrantGround=imageY+552*imageScale;
-  const ground=imageY+630*imageScale,hydrantHeight=unit*.44,hydrantScale=hydrantHeight/1464;
-  return {width,height,x,ground,hydrantGround,tetherGround:hydrantGround,unit,
-    image:{x:imageX,y:imageY,scale:imageScale},perspective:.5,depthScale:.32,roadSlope:269/1536,
-    nearDepth:-.16,farDepth:0,
-    road:[{x:imageX,y:imageY+486*imageScale},{x:imageX+1536*imageScale,y:imageY+755*imageScale},
-      {x:width,y:height},{x:0,y:height}],hydrantHeight,hydrantScale,baseSize:unit*.195,
-    anchor:{x:x+(775-516)*hydrantScale,y:hydrantGround+(635-1460)*hydrantScale},ropeLength:unit*.22};
+  const x=width/2,ground=height-(height<500?180:145)-(height<500?0:unit*.25);
+  const hydrantHeight=unit*.44,hydrantScale=hydrantHeight/1464;
+  const view={width,height,x,ground,hydrantGround:ground,tetherGround:ground,unit,
+    perspective:.5,depthScale:.52,roadSlope:0,roomHalf:roomHalfWidth(0),
+    nearDepth:-.65,farDepth:.3,hydrantHeight,hydrantScale,baseSize:unit*.195,
+    anchor:{x:x+(775-516)*hydrantScale,y:ground+(635-1460)*hydrantScale},baseRopeLength:unit*.22,ropeLength:unit*.22};
+  view.road=roomSurfaces(view)[0].points.map(p=>projectPoint(view,p.x,p.z,p.height));
+  return view;
+}
+
+export function setRopeLength(view,tether,multiplier) {
+  const next=view.baseRopeLength*clamp(multiplier,.6,1.5),ratio=next/view.ropeLength;
+  view.ropeLength=next;
+  if(!tether) return;
+  for(const point of tether.points) {
+    for(const key of ['x','px']) point[key]=view.anchor.x+(point[key]-view.anchor.x)*ratio;
+    for(const key of ['y','py']) point[key]=Math.min(view.tetherGround-2,view.anchor.y+(point[key]-view.anchor.y)*ratio);
+  }
 }
 
 export function createTether(view) {
@@ -91,20 +96,14 @@ export function scenePose(view,tether,state) {
   return {x:end.x+knot*Math.sin(angle),y:end.y-knot*Math.cos(angle),width,height,angle,knot};
 }
 
-function ellipse(ctx,x,y,rx,ry,color) {
-  ctx.fillStyle=color; ctx.beginPath(); ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2); ctx.fill();
-}
-
-export function drawStreet(ctx,view,assets,background) {
-  if(!assets?.street)return;
-  const image=view.image,h=view.hydrantHeight;
-  ctx.drawImage(assets.street,image.x,image.y,1536*image.scale,1024*image.scale);
-  ctx.save();ctx.globalAlpha=.08;ctx.globalCompositeOperation='color';ctx.fillStyle=background;
-  ctx.fillRect(0,0,view.width,view.height);ctx.restore();
-  ctx.save();ctx.filter=`blur(${Math.max(1,h*.025)}px)`;
-  ellipse(ctx,view.x+h*.21,view.hydrantGround+h*.07,h*.42,h*.10,'rgba(25,27,30,.19)');
-  ctx.restore();
-  ellipse(ctx,view.x,view.hydrantGround,h*.23,h*.035,'rgba(25,27,30,.3)');
+export function drawRoomScene(ctx,view,assets,primary) {
+  drawRoom(ctx,view,primary);
+  if(!assets?.hydrant)return;
+  const outline=Array.from({length:32},(_,i)=>{
+    const a=i*Math.PI/16;
+    return {x:Math.cos(a)*.105,z:0,height:.22+Math.sin(a)*.22};
+  });
+  drawRoomShadow(ctx,view,outline,.75);
 }
 
 export function drawHydrant(ctx,view,assets) {

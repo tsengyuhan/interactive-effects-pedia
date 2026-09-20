@@ -1,23 +1,17 @@
 import { clamp } from './physics.mjs';
+import { projectPoint,unprojectPoint,roomHalfWidth,WALL_SLOPE,balloonOutline,projectShadow,drawRoomShadow } from './room.mjs';
 
 // x、z 為路面座標，height 為離地高度；同一透視供陰影及落片使用。
 export function projectGround(view,x,z,height=0) {
-  const scale=1/(1+z*view.perspective);
-  return {x:view.x+x*view.unit*scale,y:view.ground+(x*view.roadSlope-z*view.depthScale-height)*view.unit*scale,scale};
+  return projectPoint(view,x,z,height);
 }
 
 export function unprojectAir(view,x,y,z=0) {
-  const scale=1/(1+z*view.perspective);
-  const gx=(x-view.x)/(view.unit*scale);
-  return {x:gx,z,height:(view.ground-y)/(view.unit*scale)+gx*view.roadSlope-z*view.depthScale};
+  return unprojectPoint(view,x,y,z);
 }
 
 export function balloonShadow(view,pose) {
-  const center={x:pose.x+Math.sin(pose.angle)*pose.height/2,y:pose.y-Math.cos(pose.angle)*pose.height/2};
-  const world=unprojectAir(view,center.x,center.y);
-  const point=projectGround(view,world.x+world.height*.32,-world.height*.16);
-  return {...point,rx:pose.width*.47*point.scale,ry:pose.width*.47*point.scale*view.depthScale,
-    opacity:.52/(1+world.height*.45),blur:(2+world.height*5)*view.unit/350};
+  return projectShadow(view,balloonOutline(view,pose));
 }
 
 export function placeShard(view,piece,z=0) {
@@ -61,7 +55,10 @@ export function advanceGroundShard(piece,dt,view) {
     if(piece.gz<near || piece.gz>far) {piece.gz=clamp(piece.gz,near,far);piece.gvz*=-.15;}
     const scale=projectGround(view,0,piece.gz).scale;
     const padding=Math.min(piece.width*.15,view.width*.08)/piece.unit;
-    const left=(-view.x+12)/(view.unit*scale)+padding,right=(view.width-view.x-12)/(view.unit*scale)-padding;
+    const half=roomHalfWidth(piece.gz);
+    const radius=piece.polygon?.reduce((max,p)=>Math.max(max,Math.hypot(p.x,p.y)/piece.unit),0)||0;
+    const wallPadding=Math.max(.08,radius*Math.hypot(1,WALL_SLOPE)/WALL_SLOPE);
+    const left=Math.max(-half+wallPadding,(-view.x+12)/(view.unit*scale)+padding),right=Math.min(half-wallPadding,(view.width-view.x-12)/(view.unit*scale)-padding);
     if(piece.gx<left || piece.gx>right) {piece.gx=clamp(piece.gx,left,right);piece.gvx*=-.15;}
   }
 }
@@ -93,18 +90,13 @@ export function clipRoad(ctx,view) {
 }
 
 export function drawBalloonShadow(ctx,view,pose) {
-  const shadow=balloonShadow(view,pose);
-  ctx.save();clipRoad(ctx,view);ctx.filter=`blur(${shadow.blur}px)`;
-  ctx.fillStyle=`rgba(25,27,30,${shadow.opacity})`;
-  ctx.beginPath();ctx.ellipse(shadow.x,shadow.y,shadow.rx,shadow.ry,Math.atan(view.roadSlope),0,Math.PI*2);ctx.fill();ctx.restore();
+  drawRoomShadow(ctx,view,balloonOutline(view,pose));
 }
 
 export function drawShardShadow(ctx,view,piece) {
   if(piece.height>.35) return;
-  const point=projectGround(view,piece.gx+piece.height*.32,piece.gz-piece.height*.16),size=point.scale/piece.initialScale*view.unit/piece.unit;
-  ctx.save();clipRoad(ctx,view);ctx.translate(point.x,point.y);ctx.scale(size,size);
-  ctx.transform(1,view.roadSlope,piece.gx*view.perspective*point.scale,
-    (view.depthScale+view.roadSlope*piece.gx*view.perspective)*point.scale,0,0);ctx.rotate(piece.angle);
-  ctx.fillStyle=`rgba(25,27,30,${.28/(1+piece.height*12)})`;
-  ctx.beginPath();piece.polygon.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.fill();ctx.restore();
+  const c=Math.cos(piece.angle),s=Math.sin(piece.angle);
+  const outline=piece.polygon.map(p=>({x:piece.gx+(p.x*c-p.y*s)/piece.unit,
+    z:piece.gz+(p.x*s+p.y*c)/piece.unit,height:piece.height+.002}));
+  drawRoomShadow(ctx,view,outline,.8);
 }
