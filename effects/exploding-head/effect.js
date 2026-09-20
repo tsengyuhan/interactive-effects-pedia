@@ -1,4 +1,5 @@
-import { resetState, pump, advance, estimateHead, splitMask, portraitBounds, fitPortrait } from './physics.mjs';
+import { resetState, pump, advance, estimateHead, splitMask, portraitBounds, fitPortrait, balloonPose, fractureBalloon, advanceShard } from './physics.mjs';
+import { createBalloon } from './balloon.mjs';
 
 const shell = Shell.init({ id: 'exploding-head' });
 const canvas = document.createElement('canvas');
@@ -26,6 +27,7 @@ let raf = 0, lastTime = 0, lastVideoTime = -1, lastFrameAt = 0;
 let width = 1, height = 1, dpr = 1, cameraTimer = 0, startupTimer = 0;
 let particles = [], lastPose = null, statusKey = '';
 let composition = null, cameraWidth = 0, cameraHeight = 0;
+let balloon;
 
 const controls = document.createElement('div');
 controls.className = 'exploding-controls';
@@ -156,6 +158,7 @@ function infer(now) {
       layer.ctx.drawImage(matte.canvas, 0, 0, w, h);
       layer.ctx.globalCompositeOperation = 'source-over';
     }
+    if (head && !state.exploded) balloon.update(headLayer.canvas, head);
     ready = true;
     lastFrameAt = now;
     clearTimeout(startupTimer);
@@ -170,14 +173,30 @@ function layout() {
 }
 
 function headPose(now, view) {
-  const inflation = state.scale - 1;
-  return {
-    x: head.cx + Math.sin(now / 580) * inflation * 4,
-    y: head.bottom - inflation * 6 + Math.sin(now / 420) * inflation * 3,
-    angle: Math.sin(now / 720) * inflation * 0.028,
-    scale: state.scale,
-    view
-  };
+  return balloonPose(head, state, now, view);
+}
+
+function neckBridge(pose) {
+  const length = head.bottom-head.top;
+  const half = head.chinWidth*.94;
+  // 在球面內側銜接原尺寸脖子，以同影格皮膚延伸遮住切線。
+  const topY = pose.y-pose.height*.14;
+  const topX = pose.x+Math.sin(pose.angle)*pose.height*.14;
+  const lowerY = pose.anchorY;
+  ctx.save(); ctx.beginPath();
+  ctx.moveTo(pose.anchorX-half, lowerY);
+  ctx.bezierCurveTo(pose.anchorX-half, head.bottom, topX-half*1.1, topY+length*.05, topX-half*1.25, topY);
+  ctx.lineTo(topX+half*1.25, topY);
+  ctx.bezierCurveTo(topX+half*1.1, topY+length*.05, pose.anchorX+half, head.bottom, pose.anchorX+half, lowerY);
+  ctx.closePath(); ctx.clip();
+  ctx.filter='blur(0.65px)';
+  ctx.drawImage(frame.canvas, head.cx-half*.65, head.bottom-length*.055, half*1.3, length*.105,
+    Math.min(topX,pose.anchorX)-half*1.35, topY-1, half*2.7+Math.abs(topX-pose.anchorX), lowerY-topY+2);
+  ctx.filter='none';
+  const shade=ctx.createLinearGradient(0,topY,0,lowerY);
+  shade.addColorStop(0,'rgba(30,18,13,0.16)'); shade.addColorStop(1,'rgba(30,18,13,0)');
+  ctx.fillStyle=shade; ctx.fillRect(topX-half*1.5,topY,half*3,lowerY-topY);
+  ctx.restore();
 }
 
 function draw(now) {
@@ -191,39 +210,52 @@ function draw(now) {
     ctx.drawImage(body.canvas, 0, 0);
     if (!state.exploded) {
       lastPose = headPose(now, view);
-      ctx.translate(lastPose.x, lastPose.y); ctx.rotate(lastPose.angle); ctx.scale(lastPose.scale, lastPose.scale);
-      ctx.drawImage(headLayer.canvas, -head.cx, -head.bottom);
+      neckBridge(lastPose);
+      ctx.translate(lastPose.x, lastPose.y); ctx.rotate(lastPose.angle);
+      ctx.drawImage(balloon.render(state.pressure), -lastPose.width/2, -lastPose.height, lastPose.width, lastPose.height);
     }
     ctx.restore();
   }
   for (const piece of particles) {
-    ctx.save(); ctx.globalAlpha = Math.min(1, Math.max(0, (piece.life - piece.age) / 0.8));
-    ctx.translate(piece.x, piece.y); ctx.rotate(piece.angle); ctx.scale(-1, 1);
-    ctx.drawImage(debris.canvas, piece.sx, piece.sy, piece.sw, piece.sh, -piece.w / 2, -piece.h / 2, piece.w, piece.h);
+    ctx.save(); ctx.globalAlpha = Math.min(1, Math.max(0, (piece.life - piece.age) / 1.1));
+    ctx.translate(piece.x, piece.y); ctx.rotate(piece.angle);
+    ctx.scale(Math.cos(piece.flip), Math.cos(piece.tilt));
+    ctx.beginPath();
+    piece.polygon.forEach((point,i) => { if(i) ctx.lineTo(point.x,point.y); else ctx.moveTo(point.x,point.y); });
+    ctx.closePath(); ctx.clip();
+    ctx.drawImage(debris.canvas, -piece.offsetX, -piece.offsetY, piece.width, piece.height);
+    // 背面較暗，翻面時會收成細線，呈現薄膜厚度。
+    if(Math.cos(piece.flip)*Math.cos(piece.tilt)<0) {
+      ctx.fillStyle='rgba(46,30,22,0.28)'; ctx.fillRect(-piece.offsetX,-piece.offsetY,piece.width,piece.height);
+    }
     ctx.restore();
   }
 }
 
 function explode() {
-  // 保存爆炸當下的真實頭部像素，後續仍持續推論即時身體。
   const pose = lastPose || headPose(performance.now(), layout());
-  const sw = head.right - head.left, sh = head.bottom - head.top;
-  debris.canvas.width = Math.ceil(sw); debris.canvas.height = Math.ceil(sh);
-  debris.ctx.drawImage(headLayer.canvas, head.left, head.top, sw, sh, 0, 0, sw, sh);
-  const view = pose.view, factor = pose.scale * view.scale;
-  const cosine = Math.cos(pose.angle), sine = Math.sin(pose.angle);
-  particles = [];
-  for (let row = 0; row < 7; row++) for (let col = 0; col < 7; col++) {
-    const sx = col * sw / 7, sy = row * sh / 7;
-    const dx = head.left + sx + sw / 14 - head.cx;
-    const dy = head.top + sy + sh / 14 - head.bottom;
-    particles.push({ sx, sy, sw: sw / 7, sh: sh / 7, w: sw / 7 * factor, h: sh / 7 * factor,
-      x: view.x + frame.canvas.width * view.scale - (pose.x * view.scale + (dx * cosine - dy * sine) * factor),
-      y: view.y + pose.y * view.scale + (dx * sine + dy * cosine) * factor,
-      vx: (3 - col) * 60 + (Math.random() - 0.5) * 90,
-      vy: -170 + (row - 3) * 35 + Math.random() * 60,
-      angle: -pose.angle, spin: (Math.random() - 0.5) * 5, age: 0, life: 2.6 + Math.random() * 0.8 });
-  }
+  // 凍結已著色球面；鏡像與主畫面一致，初始碎片可拼回氣球。
+  debris.canvas.width = debris.canvas.height = 512;
+  debris.ctx.save(); debris.ctx.translate(512,0); debris.ctx.scale(-1,1);
+  debris.ctx.drawImage(balloon.canvas,0,0); debris.ctx.restore();
+  const view=pose.view, w=pose.width*view.scale, h=pose.height*view.scale;
+  const angle=-pose.angle, cosine=Math.cos(angle), sine=Math.sin(angle);
+  const centerX=view.x+(frame.canvas.width-pose.x)*view.scale;
+  const centerY=view.y+pose.y*view.scale;
+  particles=fractureBalloon().map(cell => {
+    const dx=cell.center.x*w/2, dy=(cell.center.y-1)*h/2;
+    const mass=.8+Math.random()*.6;
+    return {
+      polygon:cell.polygon.map(p=>({x:(p.x-cell.center.x)*w/2,y:(p.y-cell.center.y)*h/2})),
+      x:centerX+dx*cosine-dy*sine, y:centerY+dx*sine+dy*cosine,
+      width:w,height:h,offsetX:(cell.center.x+1)*w/2,offsetY:(cell.center.y+1)*h/2,
+      vx:cell.center.x*(170+Math.random()*120),vy:cell.center.y*(120+Math.random()*90)-90,
+      angle,spin:(Math.random()-.5)*3.8,flip:0,tilt:0,
+      flipSpeed:(Math.random()>.5?1:-1)*(2+Math.random()*4),tiltSpeed:(Math.random()-.5)*3,
+      drag:(.7+Math.sqrt(cell.area)*1.3)/mass,phase:Math.random()*Math.PI*2,
+      age:0,life:4.6+Math.random()*2.1
+    };
+  });
   sound(true); updateUI();
 }
 
@@ -237,10 +269,7 @@ function tick(now) {
     }
     // 裝置暫停供幀時，不讓使用者對著過期的人像繼續打氣。
     if (ready && now - lastFrameAt > 750) { tracked = false; updateUI(); }
-    for (const piece of particles) {
-      piece.age += dt; piece.vy += 430 * dt;
-      piece.x += piece.vx * dt; piece.y += piece.vy * dt; piece.angle += piece.spin * dt;
-    }
+    for (const piece of particles) advanceShard(piece, dt);
     particles = particles.filter(piece => piece.age < piece.life);
     // 先計算上限附近的繪圖姿態，再用同一姿態切成碎片。
     const burst = advance(state, dt, tracked);
@@ -265,6 +294,7 @@ function release() {
   segmenter = detector = null;
   if (audio) { try { void audio.close().catch(() => {}); } catch {} audio = null; }
   particles = []; bodyPixels = headPixels = null;
+  balloon?.release(); balloon = null;
   for (const layer of [frame, body, headLayer, bodyMask, headMask, debris]) layer.canvas.width = layer.canvas.height = 1;
   window.removeEventListener('resize', resize);
   document.removeEventListener('visibilitychange', visibility);
@@ -317,6 +347,8 @@ async function camera() {
 async function start() {
   updateUI(); resize();
   shell.showLoading(t('正在準備攝影機與本地模型…'));
+  try { balloon = createBalloon(document); }
+  catch (error) { fail(error, '無法建立 3D 氣球，請啟用瀏覽器硬體加速，並使用 Chrome／Edge 重新整理。'); return; }
   try { await camera(); }
   catch (error) {
     fail(error, '無法開啟攝影機，請允許攝影機權限、關閉占用相機的程式，再經 start.bat 或 HTTPS 開啟並重新整理。');

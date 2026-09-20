@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import * as physics from './physics.mjs';
+import { createBalloon, fillTexture } from './balloon.mjs';
 
 const source = fs.readFileSync(new URL('./effect.js', import.meta.url), 'utf8');
 const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -90,7 +91,7 @@ test('最大頭部含浮動與旋轉，在桌面及直橫手機構圖內完整�
 // 只在測試副本置換模型 import，正式頁面沒有偽造模式或測試入口。
 function harness(options = {}) {
   const events = {}, documentEvents = {}, elements = [], timers = new Map(), frames = new Map();
-  const counts = { mask: 0, segmenter: 0, detector: 0, tracks: 0, infer: 0, detect: 0 };
+  const counts = { mask: 0, segmenter: 0, detector: 0, tracks: 0, infer: 0, detect: 0, balloon: 0 };
   let nextId = 1, now = 0, errors = [], faceCount = 1, detectedFrame;
   function element(tag) {
     const listeners = {};
@@ -105,7 +106,8 @@ function harness(options = {}) {
         setTransform() {}, fillRect() { el.draws = []; }, clearRect() { el.draws = []; },
         drawImage(...args) { el.draws.push(args); }, save() {}, restore() {}, translate() {}, scale() {}, rotate() {},
         createImageData(width, height) { return { width, height, data: new Uint8ClampedArray(width * height * 4) }; },
-        putImageData() {}
+        putImageData() {}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, bezierCurveTo() {}, clip() {},
+        createLinearGradient() { return { addColorStop() {} }; }
       }; }
     };
     elements.push(el); return el;
@@ -135,7 +137,12 @@ function harness(options = {}) {
   const container = element('div'); container.clientWidth = 800; container.clientHeight = 600;
   let reset;
   const context = {
-    ...physics, modelAPI, console: { error() {} }, t: x => x,
+    ...physics, modelAPI,
+    createBalloon(document) {
+      if (options.noWebGL) throw new Error('WebGL unavailable');
+      const canvas=document.createElement('canvas');
+      return { canvas, update() {}, render() { return canvas; }, release() { counts.balloon++; } };
+    }, console: { error() {} }, t: x => x,
     document: { hidden: false, createElement: element,
       addEventListener(key, fn) { documentEvents[key] = fn; }, removeEventListener(key) { delete documentEvents[key]; } },
     Shell: { init() { return {
@@ -151,7 +158,7 @@ function harness(options = {}) {
   };
   context.window = context;
   const sandbox = vm.createContext(context);
-  vm.runInContext(source.replace(/^import[^\n]+\n/, '').replace("import('../../libs/mediapipe/vision_bundle.mjs')", 'Promise.resolve(modelAPI)'), sandbox);
+  vm.runInContext(source.replace(/^import[^\n]+\n/gm, '').replace("import('../../libs/mediapipe/vision_bundle.mjs')", 'Promise.resolve(modelAPI)'), sandbox);
   return {
     counts, timers, frames, errors, stream, segmenter, detector,
     get button() { return elements.find(el => el.className === 'exploding-pump'); },
@@ -201,11 +208,11 @@ test('完整互動：載入禁用、同幀不重推論、爆炸後追蹤／失�
   assert.equal(page.state.exploded, false);
   assert.equal(page.button.disabled, true);
   for (let i = 0; i < 120 && !page.state.exploded; i++) page.step();
-  assert.equal(page.state.exploded, true); assert.equal(page.state.particles, 49);
+  assert.equal(page.state.exploded, true); assert.equal(page.state.particles, 32);
   page.faces(0); page.step();
   assert.equal(page.state.tracked, false); assert.match(page.status, /追蹤遺失/);
   page.faces(1); page.step(); assert.equal(page.state.exploded, true);
-  for (let i = 0; i < 240; i++) page.step();
+  for (let i = 0; i < 440; i++) page.step();
   assert.equal(page.drawCount, 1);
   page.faces(0); page.step(); assert.equal(page.drawCount, 0);
   page.faces(1); page.step(); assert.equal(page.drawCount, 1);
@@ -217,7 +224,7 @@ test('完整互動：載入禁用、同幀不重推論、爆炸後追蹤／失�
   assert.equal(page.counts.infer, page.counts.mask);
   assert.equal(page.counts.infer, page.counts.detect);
   page.leave(); assert.equal(page.frames.size, 0);
-  assert.equal(page.counts.segmenter, 1); assert.equal(page.counts.detector, 1); assert.equal(page.counts.tracks, 1);
+  assert.equal(page.counts.segmenter, 1); assert.equal(page.counts.detector, 1); assert.equal(page.counts.tracks, 1); assert.equal(page.counts.balloon, 1);
 });
 
 test('背景分頁停止 RAF，返回只排一個迴圈', async () => {
@@ -297,7 +304,88 @@ test('效果內中文 UI（含動態狀態及 shell 標籤）都有英文翻譯'
 
 test('效果依賴僅引用存在的本地檔案', () => {
   assert.doesNotMatch(source, /https?:\/\//);
-  for (const path of ['./physics.mjs', '../../libs/mediapipe/vision_bundle.mjs', '../../libs/mediapipe/selfie_segmenter.tflite', '../../libs/mediapipe/blaze_face_short_range.tflite', '../../libs/mediapipe/wasm/vision_wasm_internal.wasm', '../../libs/mediapipe/wasm/vision_wasm_nosimd_internal.wasm']) {
+  for (const path of ['./physics.mjs', './balloon.mjs', '../../libs/mediapipe/vision_bundle.mjs', '../../libs/mediapipe/selfie_segmenter.tflite', '../../libs/mediapipe/blaze_face_short_range.tflite', '../../libs/mediapipe/wasm/vision_wasm_internal.wasm', '../../libs/mediapipe/wasm/vision_wasm_nosimd_internal.wasm']) {
     assert.ok(fs.existsSync(new URL(path, import.meta.url)), path);
   }
+});
+
+test('不規則分割覆蓋整個圓面，面積與邊數有差異且不重疊', () => {
+  let seed=12345;
+  const random=()=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/4294967296);
+  const cells=physics.fractureBalloon(32,random);
+  assert.equal(cells.length,32);
+  assert.ok(Math.abs(cells.reduce((sum,cell)=>sum+cell.area,0)-Math.PI)<.003);
+  assert.ok(Math.max(...cells.map(cell=>cell.area))/Math.min(...cells.map(cell=>cell.area))>2);
+  assert.ok(new Set(cells.map(cell=>cell.polygon.length)).size>2);
+  const contains=(polygon,x,y)=>polygon.every((a,i)=>{
+    const b=polygon[(i+1)%polygon.length]; return (b.x-a.x)*(y-a.y)-(b.y-a.y)*(x-a.x)>=-1e-9;
+  });
+  for(let i=0;i<500;i++) {
+    const angle=random()*Math.PI*2,radius=Math.sqrt(random())*.99;
+    assert.equal(cells.filter(cell=>contains(cell.polygon,Math.cos(angle)*radius,Math.sin(angle)*radius)).length,1);
+  }
+});
+
+test('薄片受阻力減速、翻面且維持有限值，30與120fps軌跡接近', () => {
+  const initial={x:0,y:0,vx:220,vy:-180,angle:0,flip:0,tilt:0,flipSpeed:4,tiltSpeed:1.3,spin:2,drag:1.1,phase:.7,age:0};
+  const slow={...initial},fast={...initial};
+  for(let i=0;i<180;i++) physics.advanceShard(slow,1/30);
+  for(let i=0;i<720;i++) physics.advanceShard(fast,1/120);
+  for(const value of Object.values(slow)) assert.ok(Number.isFinite(value));
+  assert.ok(Math.hypot(slow.x-fast.x,slow.y-fast.y)<1);
+  assert.ok(slow.y>100 && slow.y<1000);
+  assert.ok(slow.vy>0 && slow.vy<300);
+  assert.ok(Math.abs(slow.vx)<Math.abs(initial.vx));
+  assert.ok(slow.flip>10 && slow.spin<initial.spin);
+});
+
+test('新氣球輪廓含橫向鼓起與回彈均在構圖內，neck anchor不隨氣量漂移', () => {
+  const head={left:222,right:418,top:41,bottom:246,cx:320,chinWidth:34};
+  const bounds=physics.portraitBounds(640,480,head);
+  for(const [width,height] of [[1280,609],[390,844],[844,390]]) {
+    const view=physics.fitPortrait(bounds,640,width,height);
+    for(const pressure of [0,.5,.92,1]) for(const velocity of [-2,0,3]) for(let now=0;now<7000;now+=137) {
+      const pose=physics.balloonPose(head,{scale:1+pressure*(physics.MAX_SCALE-1),pressure,velocity},now,view);
+      assert.equal(pose.anchorX,head.cx); assert.equal(pose.anchorY,head.bottom+(head.bottom-head.top)*.06);
+      for(let angle=0;angle<Math.PI*2;angle+=.1) {
+        const x=Math.cos(angle)*pose.width/2,y=(Math.sin(angle)-1)*pose.height/2;
+        const px=pose.x+x*Math.cos(pose.angle)-y*Math.sin(pose.angle),py=pose.y+x*Math.sin(pose.angle)+y*Math.cos(pose.angle);
+        const sx=view.x+(640-px)*view.scale,sy=view.y+py*view.scale;
+        assert.ok(sx>=12 && sx<=width-12 && sy>=72 && sy<=height-(height<500?160:210));
+      }
+    }
+  }
+});
+
+test('透明貼圖只由有效前景延伸，不混入去背區的像素', () => {
+  const pixels=new Uint8ClampedArray(5*5*4);
+  for(let i=0;i<25;i++) pixels.set([0,255,0,0],i*4);
+  pixels.set([180,110,80,255],(2*5+2)*4);
+  fillTexture(pixels,5,5);
+  for(let i=0;i<25;i++) assert.deepEqual([...pixels.slice(i*4,i*4+4)],[180,110,80,255]);
+  const striped=new Uint8ClampedArray(5*5*4);
+  for(let y=0;y<5;y++) striped.set([y%2?0:240,90,60,255],(y*5+2)*4);
+  fillTexture(striped,5,5);
+  for(let y=0;y<5;y++) assert.equal(striped[(y*5+2)*4],y%2?0:240);
+  assert.ok(striped[(2*5)*4]>0 && striped[(2*5)*4]<240);
+});
+
+test('WebGL不可用顯示清楚錯誤且不開相機，正常離頁釋放球面', async () => {
+  const unsupported=harness({noWebGL:true}); await settle();
+  assert.match(unsupported.errors[0],/3D 氣球/); assert.equal(unsupported.state.stopped,true);
+  assert.equal(unsupported.counts.infer,0); assert.equal(unsupported.counts.tracks,0);
+  const page=harness(); await settle(); page.step(); page.reset(); page.leave(); page.leave();
+  assert.equal(page.counts.balloon,1);
+});
+
+test('GPU配置失敗會清理已建立資源', () => {
+  const deleted=[];
+  const gl={VERTEX_SHADER:1,FRAGMENT_SHADER:2,COMPILE_STATUS:3,
+    createProgram:()=>({kind:'program'}),createShader:()=>({kind:'shader'}),
+    shaderSource(){},compileShader(){},getShaderParameter:()=>false,getShaderInfoLog:()=> 'compile failed',
+    deleteShader:()=>deleted.push('shader'),deleteProgram:()=>deleted.push('program'),
+    getExtension:()=>({loseContext:()=>deleted.push('context')})
+  };
+  assert.throws(()=>createBalloon({createElement:()=>({getContext:()=>gl})}),/compile failed/);
+  assert.deepEqual(deleted,['shader','program','context']);
 });

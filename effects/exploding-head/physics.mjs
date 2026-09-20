@@ -4,8 +4,8 @@ export const clamp = (x, low, high) => Math.max(low, Math.min(high, x));
 export function portraitBounds(width, height, head) {
   if (!head) return { left: 0, top: 0, right: width, bottom: height };
   const inflation = MAX_SCALE - 1;
-  const radius = Math.max(head.cx - head.left, head.right - head.cx);
-  const length = head.bottom - head.top;
+  const radius = Math.max(head.cx - head.left, head.right - head.cx) * 1.24;
+  const length = (head.bottom - head.top) * 1.05;
   const turn = Math.sin(inflation * 0.028);
   // 以最大尺寸保留浮動與旋轉空間；鎖定後充氣不會連帶縮小身體。
   const reach = MAX_SCALE * (radius + length * turn) + inflation * 4;
@@ -105,5 +105,76 @@ export function splitMask(data, mw, mh, width, height, head, bodyRGBA, headRGBA)
     const p = i * 4;
     bodyRGBA[p + 3] = isHead ? 0 : alpha;
     headRGBA[p + 3] = isHead ? alpha : 0;
+  }
+}
+
+export function balloonPose(head, state, now, view) {
+  const inflation = state.scale - 1;
+  const squash = clamp(state.velocity * .022, -.035, .055);
+  const sourceWidth = head.right-head.left, sourceHeight = head.bottom-head.top;
+  const width = sourceWidth * state.scale * (1 + state.pressure*.16) * (1+squash);
+  const height = sourceHeight * state.scale * (1-squash*.7);
+  return {
+    x: head.cx + Math.sin(now/580)*inflation*4,
+    y: head.bottom - inflation*6 + Math.sin(now/420)*inflation*3,
+    angle: Math.sin(now/720)*inflation*.028,
+    width, height, view, anchorX: head.cx, anchorY: head.bottom+sourceHeight*.06
+  };
+}
+
+export function polygonArea(points) {
+  return Math.abs(points.reduce((sum,p,i) => {
+    const q=points[(i+1)%points.length]; return sum+p.x*q.y-q.x*p.y;
+  },0))*.5;
+}
+
+export function fractureBalloon(count=32, random=Math.random) {
+  const seeds=[];
+  // 無格線的極座標分布；拒絕過近種子，避免退化的細長碎屑。
+  for(let attempt=0;seeds.length<count && attempt<count*200;attempt++) {
+    const angle=random()*Math.PI*2, radius=Math.sqrt(random())*.98;
+    const point={x:Math.cos(angle)*radius,y:Math.sin(angle)*radius};
+    if(seeds.every(other => Math.hypot(other.x-point.x,other.y-point.y)>.13)) seeds.push(point);
+  }
+  const outline=Array.from({length:96},(_,i) => ({x:Math.cos(i*Math.PI/48),y:Math.sin(i*Math.PI/48)}));
+  return seeds.map(seed => {
+    let polygon=outline;
+    for(const other of seeds) {
+      if(other===seed) continue;
+      const nx=other.x-seed.x,ny=other.y-seed.y;
+      const limit=(other.x*other.x+other.y*other.y-seed.x*seed.x-seed.y*seed.y)*.5;
+      const clipped=[];
+      for(let i=0;i<polygon.length;i++) {
+        const a=polygon[i],b=polygon[(i+1)%polygon.length];
+        const da=a.x*nx+a.y*ny-limit,db=b.x*nx+b.y*ny-limit;
+        if(da<=1e-9) clipped.push(a);
+        if((da<0)!==(db<0)) { const t=da/(da-db); clipped.push({x:a.x+(b.x-a.x)*t,y:a.y+(b.y-a.y)*t}); }
+      }
+      polygon=clipped;
+    }
+    let twiceArea=0,cx=0,cy=0;
+    for(let i=0;i<polygon.length;i++) {
+      const a=polygon[i],b=polygon[(i+1)%polygon.length],cross=a.x*b.y-b.x*a.y;
+      twiceArea+=cross; cx+=(a.x+b.x)*cross; cy+=(a.y+b.y)*cross;
+    }
+    return { polygon, area:Math.abs(twiceArea)*.5, center:{x:cx/(3*twiceArea),y:cy/(3*twiceArea)} };
+  });
+}
+
+export function advanceShard(piece, dt) {
+  const steps=Math.max(1,Math.ceil(dt*120)), step=dt/steps;
+  for(let i=0;i<steps;i++) {
+    piece.age+=step;
+    piece.flip+=piece.flipSpeed*step; piece.tilt+=piece.tiltSpeed*step;
+    piece.angle+=piece.spin*step;
+    const face=Math.abs(Math.cos(piece.flip)*Math.cos(piece.tilt));
+    // 面積/質量比加上朝向控制阻力；迎風時攤平慢落，側立時加速。
+    const drag=(.55+face*2.8)*piece.drag;
+    const flutter=Math.sin(piece.age*4.3+piece.phase)*face*48;
+    piece.vx+=(flutter-piece.vx*drag)*step;
+    piece.vy+=(260-piece.vy*drag)*step;
+    piece.x+=piece.vx*step; piece.y+=piece.vy*step;
+    piece.spin*=Math.exp(-.12*step);
+    piece.flipSpeed*=Math.exp(-.045*step); piece.tiltSpeed*=Math.exp(-.045*step);
   }
 }

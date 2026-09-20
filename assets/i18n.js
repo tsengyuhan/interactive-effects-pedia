@@ -7,6 +7,9 @@
     "拉開過程用連續幀（布料皺褶真實），開口內部是 alpha 透明。牛仔褲 7 幀（第 1 幀起鈕扣鬆開，連腰口一起張開）、包包 9 幀，接進來前先逐幀對齊色彩，拖曳時才不會閃。程式在相鄰幀間交叉淡化，並沿拉鍊軸把較閉的那幀漸變補滿，開口的外緣一律收在拉鍊頭上；開口尖點與齒條位置都是逐幀量測後內插，拉鍊頭才會一直貼著齒條跟手移動": "The opening uses aligned frames with real fabric folds and transparent interiors: seven for jeans (the button loosens and the waistband opens from the first frame) and nine for the bag. Adjacent frames crossfade, progressively restoring the more closed frame along the zipper axis. The opening edge stays at the slider, while measured opening tips and tooth positions are interpolated so the slider follows the seam and your hand.",
     /* ── 爆炸頭 ─────────────────────────── */
     "爆炸頭": "Exploding Head",
+    "即時頭像包覆有光影的球面，彈簧充氣、皮膚銜接脖子；爆炸切成不規則薄片，受重力與朝向阻力翻面飄落。": "Your live portrait wraps around a lit sphere with springy inflation and a skin bridge to the neck. It pops into irregular flakes that tumble under gravity and orientation-dependent drag.",
+    "瀏覽器需支援 WebGL 與硬體加速": "Browser support for WebGL and hardware acceleration required",
+    "無法建立 3D 氣球，請啟用瀏覽器硬體加速，並使用 Chrome／Edge 重新整理。": "Cannot create the 3D balloon. Enable browser hardware acceleration and reload in Chrome or Edge.",
     "幫整顆頭充氣直到爆炸，碎片飄落後留下即時無頭人像": "Inflate your whole head until it pops, then watch the pieces fall around your live headless portrait",
     "一個人正對鏡頭，讓頭髮與肩膀完整入鏡；連點下方打氣，爆炸後按重置再玩。可在資訊面板調整背景與充氣速度。": "Face the camera alone with your hair and shoulders in view. Tap Pump below, then Reset after the pop. Adjust the background and inflation speed in the info panel.",
     "本地人像分割與臉部偵測讀取同一影格，以前景頂緣估計含頭髮的頭部區域，分離頭部與身體。": "Local segmentation and face detection read the same frame. The foreground top edge helps estimate the head, including hair, and separate it from the body.",
