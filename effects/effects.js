@@ -21,6 +21,24 @@
 // }
 window.EFFECTS = [
   {
+    id: "exploding-head",
+    title: "爆炸頭",
+    category: "身體動作",
+    description: "幫整顆頭充氣直到爆炸，碎片飄落後留下即時無頭人像",
+    instructions: "一個人正對鏡頭，讓頭髮與肩膀完整入鏡；連點下方打氣，爆炸後按重置再玩。可在資訊面板調整背景與充氣速度。",
+    tech: ["MediaPipe Image Segmenter", "MediaPipe Face Detector", "Canvas 2D", "Web Audio API", "getUserMedia"],
+    principle: [
+      "本地人像分割與臉部偵測讀取同一影格，以前景頂緣估計含頭髮的頭部區域，分離頭部與身體。",
+      "按次累積氣量，以阻尼彈簧放大即時頭部；接近尺寸上限才切成人像碎片，搭配合成音效飄落。",
+      "爆炸後持續追蹤並移除頭部；失去追蹤時暫停顯示人像，找回後維持爆炸狀態。"
+    ],
+    requirements: ["攝影機", "建議 Chrome / Edge", "需經 start.bat 或 HTTPS 開啟", "單人正面；頭部輪廓為估算，長髮、側臉與遮擋可能殘邊", "本地雙模型推論，手機或較舊裝置可能較慢；音效不需麥克風"],
+    offline: true,
+    offlineNote: "",
+    hasParams: true,
+    why: "事情太多感覺頭要爆炸了"
+  },
+  {
     id: "ink-brush",
     title: "水墨筆觸",
     category: "網頁互動",

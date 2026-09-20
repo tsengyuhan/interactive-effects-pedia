@@ -1,0 +1,46 @@
+# 爆炸頭
+
+事情太多感覺頭要爆炸了。連點打氣，讓 webcam 去背人像的整顆頭（包含估算範圍內的頭髮）像氣球一樣膨脹、回彈與浮動。到達上限後，人像碎片搭配合成音效飄落，留下持續更新的無頭人像。
+
+## 操作與限制
+
+- 一個人正對鏡頭，完整露出頭髮與肩膀，與鏡頭保持一些距離，替膨脹留空間。
+- 點擊中央下方「打氣」，預設 12 下到頂；等待視覺膨脹接近上限才爆炸。右上「重置」可隨時重玩。
+- 第一次辨識到頭部時，構圖會預留最大膨脹、浮動與旋轉空間，之後身體比例固定；重置可依新站位重新校準。大幅靠近鏡頭或移出初始站位仍可能超出預留範圍。
+- 資訊面板可調背景顏色、充氣速度（每次加量，0.5–2 倍，約 24–6 下）。
+- 載入、無臉、多臉、相機停幀、錯誤與爆炸後均禁用打氣。失去追蹤時暫停顯示整個人像，避免漏出原頭；重新正對鏡頭後恢復即時身體，爆炸狀態不變。
+- 僅以單人正面為基準。臉框搭配前景頂緣估算頭部輪廓，並非精準頭髮分割；長髮、側臉、手部遮擋、背景相近、快速移動可能殘邊或誤裁肩頸。沒有寫實血腥斷面。
+- 音效由 Web Audio 合成，每次點擊啟用音訊；瀏覽器未允許音訊仍可遊玩。切到背景分頁暫停動畫與推論。
+
+## 技術與需求
+
+使用既有 MediaPipe Tasks Vision 0.10.14 的 ImageSegmenter 與 FaceDetector，CPU 推論、Canvas 2D 合成，沒有新增依賴。兩模型讀取同一張最多 640 像素寬的相機快照；原人像拆成身體遮罩與頭部遮罩，只放大即時頭部。每次推論立即釋放 mask 結果，離頁關閉模型、相機、音訊及 RAF，包含初始化途中離頁。
+
+- 攝影機；不需麥克風。
+- 建議 Chrome／Edge；手機與較舊裝置雙模型推論可能較慢，沒有保證幀率。
+- 必須以 localhost 的本機伺服器或 HTTPS 開啟，不能直接使用 `file://`。
+- 模型、WASM、程式均在專案內；下載完整專案後可在本機無外網執行。這不代表線上網站有 Service Worker 離線快取。
+
+## 下載到自己的電腦
+
+1. `git clone https://github.com/tsengyuhan/interactive-effects-pedia.git`，或由 GitHub Download ZIP 後解壓縮。
+2. 雙擊專案根目錄 `start.bat`。
+3. 開啟 `http://localhost:8080/effects/exploding-head/`，允許攝影機權限。
+4. 確認 `libs/mediapipe/` 包含 `vision_bundle.mjs`、`wasm/`、`selfie_segmenter.tflite` 與 `blaze_face_short_range.tflite`。
+
+## 驗證
+
+在專案根目錄執行：
+
+```text
+node assets/i18n.test.js
+node --test effects/exploding-head/effect.test.mjs
+```
+
+自動測試使用合成遮罩及模擬 DOM／模型檢查充氣狀態、裁切、構圖邊界與資源清理。另已以 Chrome 實際相機驗證去背、充氣、爆炸與重置；以瀏覽器相機權限政策驗證拒絕提示，以只允許本機資源的 CSP 頁面驗證重新載入。這些檢查不代表所有裝置、髮型與光線都能精準裁切。`thumb.png` 為實際效果畫面。
+
+## 線上體驗
+
+https://tsengyuhan.github.io/interactive-effects-pedia/effects/exploding-head/
+
+此為整合發佈後的預定網址，本次未部署。

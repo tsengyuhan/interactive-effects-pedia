@@ -1,0 +1,27 @@
+.exploding-stage { display: block; width: 100%; height: 100%; }
+.exploding-controls {
+  position: absolute; bottom: max(18px, env(safe-area-inset-bottom));
+  left: 50%; transform: translateX(-50%); width: min(380px, calc(100% - 32px));
+  display: grid; gap: 8px; justify-items: center; pointer-events: auto;
+  color: #183d39; text-align: center;
+}
+.exploding-status {
+  margin: 0; padding: 7px 13px; border-radius: 12px; background: #ffffffde;
+  font-size: 13px; line-height: 1.5; max-width: 100%;
+}
+.exploding-meter { display: flex; gap: 12px; align-items: center; padding: 5px 13px; border-radius: 24px; background: #ffffffde; font-variant-numeric: tabular-nums; }
+.exploding-meter progress { width: 140px; height: 9px; accent-color: #ef7756; }
+.exploding-pump {
+  pointer-events: auto; touch-action: manipulation; user-select: none;
+  width: 210px; min-height: 62px; border: 2px solid #fff; border-radius: 999px;
+  background: #1e5b51; color: white; font-size: 20px; font-weight: 700;
+  box-shadow: 0 5px 0 #123e37, 0 9px 24px #173d3920; cursor: pointer;
+}
+.exploding-pump:active:not(:disabled) { transform: translateY(4px); box-shadow: 0 1px 0 #123e37; }
+.exploding-pump:disabled { opacity: .55; cursor: default; }
+.exploding-pump:focus-visible { outline: 3px solid #ef7756; outline-offset: 4px; }
+@media (max-height: 500px) {
+  .exploding-controls { bottom: 8px; gap: 4px; }
+  .exploding-pump { min-height: 44px; font-size: 17px; }
+  .exploding-status { font-size: 11px; padding: 3px 8px; }
+}

@@ -1,0 +1,353 @@
+import { resetState, pump, advance, estimateHead, splitMask, portraitBounds, fitPortrait } from './physics.mjs';
+
+const shell = Shell.init({ id: 'exploding-head' });
+const canvas = document.createElement('canvas');
+canvas.className = 'exploding-stage';
+canvas.setAttribute('aria-label', t('即時充氣人像'));
+shell.container.append(canvas);
+const ctx = canvas.getContext('2d');
+const video = document.createElement('video');
+video.muted = true;
+video.autoplay = true;
+video.playsInline = true;
+
+function surface() {
+  const canvas = document.createElement('canvas');
+  return { canvas, ctx: canvas.getContext('2d') };
+}
+const frame = surface(), body = surface(), headLayer = surface();
+const bodyMask = surface(), headMask = surface(), debris = surface();
+let bodyPixels, headPixels;
+let state = resetState();
+let background = '#dcebe3', speed = 1;
+let stream, segmenter, detector, audio;
+let stopped = false, ready = false, tracked = false, head = null;
+let raf = 0, lastTime = 0, lastVideoTime = -1, lastFrameAt = 0;
+let width = 1, height = 1, dpr = 1, cameraTimer = 0, startupTimer = 0;
+let particles = [], lastPose = null, statusKey = '';
+let composition = null, cameraWidth = 0, cameraHeight = 0;
+
+const controls = document.createElement('div');
+controls.className = 'exploding-controls';
+const status = document.createElement('p');
+status.className = 'exploding-status';
+status.setAttribute('role', 'status');
+status.setAttribute('aria-live', 'polite');
+const meter = document.createElement('div');
+meter.className = 'exploding-meter';
+const progress = document.createElement('progress');
+progress.max = 1;
+progress.value = 0;
+progress.setAttribute('aria-label', t('充氣進度'));
+const percent = document.createElement('span');
+percent.textContent = '0%';
+const button = document.createElement('button');
+button.type = 'button';
+button.className = 'exploding-pump';
+button.textContent = t('打氣');
+button.disabled = true;
+meter.append(progress, percent);
+controls.append(status, meter, button);
+shell.container.append(controls);
+
+function updateUI() {
+  button.disabled = stopped || !ready || !tracked || document.hidden || state.exploded || state.pressure >= 1;
+  progress.value = state.pressure;
+  percent.textContent = `${Math.round(state.pressure * 100)}%`;
+  const key = stopped ? '效果已停止，請重新整理。' : !ready ? '正在準備攝影機與本地模型…'
+    : document.hidden ? '分頁暫停中'
+    : !tracked ? (state.exploded ? '追蹤遺失，已暫停顯示人像；請重新正對鏡頭。' : '請一個人正對鏡頭，讓頭髮與肩膀完整入鏡。')
+    : state.exploded ? '砰！移動看看無頭人像，按重置再玩一次。'
+    : state.pressure >= 1 ? '快爆炸了…'
+    : '連點打氣，讓整顆頭慢慢膨脹！';
+  if (key !== statusKey) { status.textContent = t(key); statusKey = key; }
+}
+
+shell.addParam({ type: 'color', key: 'background', label: '背景顏色', value: background,
+  onChange: value => { background = value; draw(performance.now()); } });
+shell.addParam({ type: 'range', key: 'speed', label: '充氣速度', min: 0.5, max: 2, step: 0.25, value: speed,
+  onChange: value => { speed = value; } });
+shell.addButton({ label: '重置', onClick: () => {
+  if (stopped) return;
+  state = resetState(); particles = []; lastPose = null; composition = null;
+  debris.canvas.width = debris.canvas.height = 1;
+  updateUI();
+} });
+
+function sound(explosion = false) {
+  try {
+    const Audio = window.AudioContext || window.webkitAudioContext;
+    if (!Audio || stopped) return;
+    if (!audio) audio = new Audio();
+    if (audio.state === 'suspended') void audio.resume().catch(() => {});
+    const now = audio.currentTime;
+    const gain = audio.createGain();
+    gain.connect(audio.destination);
+    const oscillator = audio.createOscillator();
+    oscillator.type = explosion ? 'triangle' : 'sine';
+    oscillator.frequency.setValueAtTime(explosion ? 150 : 240 + state.pressure * 180, now);
+    oscillator.frequency.exponentialRampToValueAtTime(explosion ? 28 : 600, now + (explosion ? 0.35 : 0.1));
+    gain.gain.setValueAtTime(explosion ? 0.3 : 0.06, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + (explosion ? 0.45 : 0.13));
+    oscillator.connect(gain);
+    oscillator.start(now); oscillator.stop(now + (explosion ? 0.5 : 0.15));
+    oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); };
+    if (explosion) {
+      const buffer = audio.createBuffer(1, Math.ceil(audio.sampleRate * 0.3), audio.sampleRate);
+      const values = buffer.getChannelData(0);
+      for (let i = 0; i < values.length; i++) values[i] = (Math.random() * 2 - 1) * (1 - i / values.length) ** 3 * 0.23;
+      const noise = audio.createBufferSource();
+      noise.buffer = buffer; noise.connect(audio.destination); noise.start();
+      noise.onended = () => noise.disconnect();
+    }
+  } catch { /* 音訊不可用仍能完成視覺互動。 */ }
+}
+
+button.addEventListener('click', () => {
+  if (button.disabled) return;
+  sound(); pump(state, speed); updateUI();
+});
+
+function resize() {
+  width = shell.container.clientWidth || window.innerWidth;
+  height = shell.container.clientHeight || window.innerHeight;
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+  draw(performance.now());
+}
+
+function infer(now) {
+  const w = Math.min(video.videoWidth, 640);
+  const h = Math.round(video.videoHeight * w / video.videoWidth);
+  if (w < 1 || h < 1) return;
+  if (cameraWidth !== video.videoWidth || cameraHeight !== video.videoHeight) {
+    composition = null;
+    cameraWidth = video.videoWidth; cameraHeight = video.videoHeight;
+  }
+  for (const layer of [frame, body, headLayer]) {
+    if (layer.canvas.width !== w || layer.canvas.height !== h) {
+      layer.canvas.width = w; layer.canvas.height = h;
+    }
+  }
+  // 兩個模型與合成都讀同一份快照，避免推論間相機換幀造成重影。
+  frame.ctx.drawImage(video, 0, 0, w, h);
+  const detections = detector.detectForVideo(frame.canvas, now).detections;
+  let result;
+  try {
+    result = segmenter.segmentForVideo(frame.canvas, now);
+    const mask = result.confidenceMasks?.[0];
+    if (!mask) throw new Error('Missing foreground mask');
+    const data = mask.getAsFloat32Array();
+    head = detections.length === 1 ? estimateHead(detections[0].boundingBox, data, mask.width, mask.height, w, h) : null;
+    tracked = Boolean(head);
+    if (head && !composition) composition = portraitBounds(w, h, head);
+    if (!bodyPixels || bodyPixels.width !== mask.width || bodyPixels.height !== mask.height) {
+      for (const layer of [bodyMask, headMask]) { layer.canvas.width = mask.width; layer.canvas.height = mask.height; }
+      bodyPixels = bodyMask.ctx.createImageData(mask.width, mask.height);
+      headPixels = headMask.ctx.createImageData(mask.width, mask.height);
+    }
+    splitMask(data, mask.width, mask.height, w, h, head, bodyPixels.data, headPixels.data);
+    bodyMask.ctx.putImageData(bodyPixels, 0, 0); headMask.ctx.putImageData(headPixels, 0, 0);
+    for (const [layer, matte] of [[body, bodyMask], [headLayer, headMask]]) {
+      layer.ctx.globalCompositeOperation = 'source-over';
+      layer.ctx.clearRect(0, 0, w, h); layer.ctx.drawImage(frame.canvas, 0, 0);
+      layer.ctx.globalCompositeOperation = 'destination-in';
+      // 相同低解析遮罩分割兩部分，接縫不會留下原尺寸的頭。
+      layer.ctx.drawImage(matte.canvas, 0, 0, w, h);
+      layer.ctx.globalCompositeOperation = 'source-over';
+    }
+    ready = true;
+    lastFrameAt = now;
+    clearTimeout(startupTimer);
+    shell.hideLoading();
+    updateUI();
+  } finally { result?.close(); }
+}
+
+function layout() {
+  const fw = frame.canvas.width, fh = frame.canvas.height;
+  return fitPortrait(composition || portraitBounds(fw, fh, null), fw, width, height);
+}
+
+function headPose(now, view) {
+  const inflation = state.scale - 1;
+  return {
+    x: head.cx + Math.sin(now / 580) * inflation * 4,
+    y: head.bottom - inflation * 6 + Math.sin(now / 420) * inflation * 3,
+    angle: Math.sin(now / 720) * inflation * 0.028,
+    scale: state.scale,
+    view
+  };
+}
+
+function draw(now) {
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = background; ctx.fillRect(0, 0, width, height);
+  if (ready && tracked && head && !stopped) {
+    const view = layout();
+    ctx.save();
+    ctx.translate(view.x + frame.canvas.width * view.scale, view.y);
+    ctx.scale(-view.scale, view.scale);
+    ctx.drawImage(body.canvas, 0, 0);
+    if (!state.exploded) {
+      lastPose = headPose(now, view);
+      ctx.translate(lastPose.x, lastPose.y); ctx.rotate(lastPose.angle); ctx.scale(lastPose.scale, lastPose.scale);
+      ctx.drawImage(headLayer.canvas, -head.cx, -head.bottom);
+    }
+    ctx.restore();
+  }
+  for (const piece of particles) {
+    ctx.save(); ctx.globalAlpha = Math.min(1, Math.max(0, (piece.life - piece.age) / 0.8));
+    ctx.translate(piece.x, piece.y); ctx.rotate(piece.angle); ctx.scale(-1, 1);
+    ctx.drawImage(debris.canvas, piece.sx, piece.sy, piece.sw, piece.sh, -piece.w / 2, -piece.h / 2, piece.w, piece.h);
+    ctx.restore();
+  }
+}
+
+function explode() {
+  // 保存爆炸當下的真實頭部像素，後續仍持續推論即時身體。
+  const pose = lastPose || headPose(performance.now(), layout());
+  const sw = head.right - head.left, sh = head.bottom - head.top;
+  debris.canvas.width = Math.ceil(sw); debris.canvas.height = Math.ceil(sh);
+  debris.ctx.drawImage(headLayer.canvas, head.left, head.top, sw, sh, 0, 0, sw, sh);
+  const view = pose.view, factor = pose.scale * view.scale;
+  const cosine = Math.cos(pose.angle), sine = Math.sin(pose.angle);
+  particles = [];
+  for (let row = 0; row < 7; row++) for (let col = 0; col < 7; col++) {
+    const sx = col * sw / 7, sy = row * sh / 7;
+    const dx = head.left + sx + sw / 14 - head.cx;
+    const dy = head.top + sy + sh / 14 - head.bottom;
+    particles.push({ sx, sy, sw: sw / 7, sh: sh / 7, w: sw / 7 * factor, h: sh / 7 * factor,
+      x: view.x + frame.canvas.width * view.scale - (pose.x * view.scale + (dx * cosine - dy * sine) * factor),
+      y: view.y + pose.y * view.scale + (dx * sine + dy * cosine) * factor,
+      vx: (3 - col) * 60 + (Math.random() - 0.5) * 90,
+      vy: -170 + (row - 3) * 35 + Math.random() * 60,
+      angle: -pose.angle, spin: (Math.random() - 0.5) * 5, age: 0, life: 2.6 + Math.random() * 0.8 });
+  }
+  sound(true); updateUI();
+}
+
+function tick(now) {
+  if (stopped || document.hidden) return;
+  const dt = Math.min((now - (lastTime || now)) / 1000, 0.05);
+  lastTime = now;
+  try {
+    if (segmenter && detector && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+      lastVideoTime = video.currentTime; infer(now);
+    }
+    // 裝置暫停供幀時，不讓使用者對著過期的人像繼續打氣。
+    if (ready && now - lastFrameAt > 750) { tracked = false; updateUI(); }
+    for (const piece of particles) {
+      piece.age += dt; piece.vy += 430 * dt;
+      piece.x += piece.vx * dt; piece.y += piece.vy * dt; piece.angle += piece.spin * dt;
+    }
+    particles = particles.filter(piece => piece.age < piece.life);
+    // 先計算上限附近的繪圖姿態，再用同一姿態切成碎片。
+    const burst = advance(state, dt, tracked);
+    if (burst) {
+      state.exploded = false; draw(now); state.exploded = true; explode();
+    }
+    draw(now);
+    raf = requestAnimationFrame(tick);
+  } catch (error) { fail(error, '人像處理失敗，請重新整理，或改用 Chrome／Edge。'); }
+}
+
+function release() {
+  if (stopped) return;
+  stopped = true; tracked = false; ready = false;
+  clearTimeout(cameraTimer); clearTimeout(startupTimer); cancelAnimationFrame(raf);
+  video.pause();
+  stream?.getTracks().forEach(track => track.stop());
+  video.srcObject = null;
+  for (const model of [segmenter, detector]) {
+    try { model?.close(); } catch { /* 關閉失敗不影響其餘資源釋放。 */ }
+  }
+  segmenter = detector = null;
+  if (audio) { try { void audio.close().catch(() => {}); } catch {} audio = null; }
+  particles = []; bodyPixels = headPixels = null;
+  for (const layer of [frame, body, headLayer, bodyMask, headMask, debris]) layer.canvas.width = layer.canvas.height = 1;
+  window.removeEventListener('resize', resize);
+  document.removeEventListener('visibilitychange', visibility);
+  updateUI(); draw(performance.now());
+}
+
+function fail(error, message) {
+  if (stopped) return;
+  console.error('[exploding-head]', error);
+  release(); shell.showError(t(message));
+}
+
+function visibility() {
+  cancelAnimationFrame(raf); lastTime = 0;
+  if (document.hidden) {
+    clearTimeout(startupTimer);
+    if (audio?.state === 'running') void audio.suspend().catch(() => {});
+  } else if (!stopped) {
+    tracked = false; lastVideoTime = -1;
+    if (stream && !ready) watchStartup();
+    if (segmenter && detector) raf = requestAnimationFrame(tick);
+  }
+  updateUI();
+}
+
+function watchStartup() {
+  clearTimeout(startupTimer);
+  if (!document.hidden) startupTimer = setTimeout(() => fail(new Error('Startup timed out'), '本地模型或影格載入逾時，請確認檔案完整後重新整理。'), 45000);
+}
+
+async function camera() {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera requires localhost or HTTPS');
+  // 權限視窗可能晚於逾時或離頁才回應，晚到的 stream 也必須關閉。
+  const pending = navigator.mediaDevices.getUserMedia({ video: { width: 960, height: 720, facingMode: 'user' }, audio: false });
+  pending.then(value => { if (stopped) value.getTracks().forEach(track => track.stop()); }, () => {});
+  try {
+    stream = await Promise.race([pending, new Promise((_, reject) => {
+      cameraTimer = setTimeout(() => reject(new Error('Camera permission timed out')), 20000);
+    })]);
+  } finally { clearTimeout(cameraTimer); }
+  if (stopped) { stream.getTracks().forEach(track => track.stop()); return; }
+  for (const track of stream.getVideoTracks()) track.addEventListener('ended', () => {
+    fail(new Error('Camera stream ended'), '攝影機已中斷，請確認裝置連接後重新整理。');
+  });
+  video.srcObject = stream;
+  watchStartup();
+  await video.play();
+}
+
+async function start() {
+  updateUI(); resize();
+  shell.showLoading(t('正在準備攝影機與本地模型…'));
+  try { await camera(); }
+  catch (error) {
+    fail(error, '無法開啟攝影機，請允許攝影機權限、關閉占用相機的程式，再經 start.bat 或 HTTPS 開啟並重新整理。');
+    return;
+  }
+  if (stopped) return;
+  watchStartup();
+  try {
+    const { FilesetResolver, ImageSegmenter, FaceDetector } = await import('../../libs/mediapipe/vision_bundle.mjs');
+    if (stopped) return;
+    const fileset = await FilesetResolver.forVisionTasks('../../libs/mediapipe/wasm');
+    if (stopped) return;
+    const createdSegmenter = await ImageSegmenter.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: '../../libs/mediapipe/selfie_segmenter.tflite', delegate: 'CPU' },
+      runningMode: 'VIDEO', outputCategoryMask: false, outputConfidenceMasks: true
+    });
+    if (stopped) { createdSegmenter.close(); return; }
+    segmenter = createdSegmenter;
+    const createdDetector = await FaceDetector.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: '../../libs/mediapipe/blaze_face_short_range.tflite', delegate: 'CPU' },
+      runningMode: 'VIDEO', minDetectionConfidence: 0.6
+    });
+    if (stopped) { createdDetector.close(); return; }
+    detector = createdDetector;
+    if (!document.hidden) { cancelAnimationFrame(raf); raf = requestAnimationFrame(tick); }
+  } catch (error) { fail(error, '本地人像模型載入失敗，請確認 libs/mediapipe 檔案完整，並經 start.bat 或 HTTPS 開啟。'); }
+}
+
+window.addEventListener('resize', resize);
+document.addEventListener('visibilitychange', visibility);
+window.addEventListener('pagehide', release, { once: true });
+// 返回快取頁面時模型與串流已釋放，重新初始化整個效果。
+window.addEventListener('pageshow', event => { if (event.persisted && stopped) location.reload(); });
+void start();
