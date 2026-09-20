@@ -1,4 +1,4 @@
-import { MAX_SCALE, resetState, pump, advance, estimateHead, fractureBalloon, resetSwing, trackSwing, advanceSwing } from './physics.mjs';
+import { MAX_SCALE, resetState, pump, advance, estimateHead, fractureBalloon, resetSwing, trackSwing, trackRoll, advanceSwing } from './physics.mjs';
 import { createStreetAssets,sceneLayout,createTether,advanceTether,scenePose,drawStreet,drawHydrant,drawTether } from './scene.mjs';
 import { placeShard,advanceGroundShard,advanceWindShard,shardPose,clipRoad,drawBalloonShadow,drawShardShadow } from './ground.mjs';
 import { createBalloon } from './balloon.mjs';
@@ -55,14 +55,20 @@ meter.append(progress, percent);
 controls.append(status, meter, button);
 shell.container.append(controls);
 
+function canReset() {
+  return state.exploded && resetElapsed===null && particles.length>0 && particles.every(piece=>piece.landed);
+}
+
 function updateUI() {
-  button.textContent=t(resetElapsed!==null?'吹走碎片中…':state.exploded?'重置':'打氣');
-  button.disabled = stopped || resetElapsed!==null || document.hidden || (!state.exploded && (!ready || !tracked || state.pressure >= 1));
+  const falling=state.exploded && resetElapsed===null && !canReset();
+  button.textContent=t(resetElapsed!==null?'吹走碎片中…':falling?'碎片飄落中…':state.exploded?'重置':'打氣');
+  button.disabled = stopped || resetElapsed!==null || falling || document.hidden || (!state.exploded && (!ready || !tracked || state.pressure >= 1));
   progress.value = state.pressure;
   percent.textContent = `${Math.round(state.pressure * 100)}%`;
   const key = stopped ? '效果已停止，請重新整理。' : !ready ? '正在準備攝影機與本地模型…'
     : document.hidden ? '分頁暫停中'
     : resetElapsed!==null ? '一陣風吹走碎片，準備下一顆氣球…'
+    : falling ? '等待所有碎片落地後，就能重置。'
     : !tracked ? (state.exploded ? '追蹤遺失，氣球已爆炸；按重置再玩一次。' : '請一個人正對鏡頭，讓五官完整入鏡。')
     : state.exploded ? '砰！碎片飄落，繩子垂下；按重置再玩一次。'
     : state.pressure >= 1 ? '快爆炸了…'
@@ -86,7 +92,7 @@ shell.addParam({ type:'range',key:'maxScale',label:'氣球最大尺寸（倍）'
 function resetEffect() {
   if (stopped) return;
   if(resetElapsed!==null) return;
-  if(state.exploded && particles.length) {resetElapsed=0;updateUI();return;}
+  if(state.exploded) {if(canReset()) {resetElapsed=0;updateUI();}return;}
   finishReset();
 }
 
@@ -176,7 +182,10 @@ function infer(now) {
     head = detections.length === 1 ? estimateHead(detections[0].boundingBox, data, mask.width, mask.height, w, h) : null;
     tracked = Boolean(head);
     // 臉框中心不受髮型、前景遮罩寬度影響，左右移頭能直接帶動繩端。
-    if(head) { const box=detections[0].boundingBox;trackSwing(swing,box.originX+box.width/2,now,w); }
+    if(head) {
+      const face=detections[0],box=face.boundingBox;
+      trackSwing(swing,box.originX+box.width/2,now,w);trackRoll(swing,face.keypoints,now,w,h);
+    }
     else swing=resetSwing();
     if (!headPixels || headPixels.width !== mask.width || headPixels.height !== mask.height) {
       headMask.canvas.width=mask.width; headMask.canvas.height=mask.height;
@@ -282,6 +291,7 @@ function tick(now) {
     if(scene && tether) advanceTether(tether,scene,dt,now,swing,state.exploded);
     if(resetElapsed!==null) advanceReset(elapsed);
     else for (const piece of particles) advanceGroundShard(piece,dt,scene);
+    if(state.exploded) updateUI();
     // 先計算上限附近的繪圖姿態，再用同一姿態切成碎片。
     const burst = advance(state, dt, tracked,maxScale);
     if (burst) {

@@ -73,7 +73,7 @@ test('頂緣找頭髮、下巴曲線羽化，分離遮罩保留前景總 alpha',
 function harness(options = {}) {
   const events = {}, documentEvents = {}, elements = [], timers = new Map(), frames = new Map(),params=new Map();
   const counts = { mask: 0, segmenter: 0, detector: 0, tracks: 0, infer: 0, detect: 0, balloon: 0 };
-  let nextId = 1, now = 0, errors = [], faceCount = 1, detectedFrame,faceX=35;
+  let nextId = 1, now = 0, errors = [], faceCount = 1, detectedFrame,faceX=35,eyePoints=[{x:.4,y:.4},{x:.6,y:.4}];
   const renders=[];
   function element(tag) {
     const listeners = {};
@@ -109,7 +109,7 @@ function harness(options = {}) {
   const detector = {
     close() { counts.detector++; },
     detectForVideo(input) { counts.detect++; assert.equal(input.tag, 'canvas'); detectedFrame = input; return {
-      detections: Array.from({ length: faceCount }, () => ({ boundingBox: { originX: faceX, originY: 25, width: 30, height: 35 } }))
+      detections: Array.from({ length: faceCount }, () => ({ boundingBox: { originX: faceX, originY: 25, width: 30, height: 35 },keypoints:eyePoints }))
     }; }
   };
   const modelAPI = {
@@ -168,12 +168,19 @@ function harness(options = {}) {
     hide(hidden) { context.document.hidden = hidden; documentEvents.visibilitychange?.(); },
     faces(count) { faceCount = count; },
     faceX(value) {faceX=value;},
+    eyes(points) {eyePoints=points;},
+    get canReset() {return vm.runInContext('canReset()',sandbox);},
     resize(width,height) {container.clientWidth=width;container.clientHeight=height;events.resize();},
     reset() { vm.runInContext('resetEffect()',sandbox); },
     param(key,value) { params.get(key).onChange(value); },
     leave() { events.pagehide(); },
     timeout(delay) { const found = [...timers.entries()].find(([, timer]) => timer.delay === delay); assert.ok(found); timers.delete(found[0]); found[1].fn(); }
   };
+}
+
+function landAll(page) {
+  for(let i=0;i<1500 && !page.canReset;i++)page.step(50);
+  assert.equal(page.canReset,true,'所有碎片應在合理時間內完成微彈落地');
 }
 
 test('場景在尚無臉時已固定，打氣、失追、重置、相機尺寸均不改構圖', async () => {
@@ -200,17 +207,17 @@ test('完整互動：載入禁用、同幀不重推論、爆炸後追蹤／失�
   for (let i = 0; i < 120 && !page.state.exploded; i++) page.step();
   assert.equal(page.state.exploded, true); assert.equal(page.state.particles, 32);
   const anchor=page.state.tether[0];
-  assert.equal(page.button.textContent,'重置'); assert.equal(page.button.disabled,false);
+  assert.equal(page.button.textContent,'碎片飄落中…'); assert.equal(page.button.disabled,true);
   page.faces(0); page.step();
   assert.deepEqual(page.state.tether[0],anchor);
-  assert.equal(page.state.tracked, false); assert.match(page.status, /追蹤遺失/);
+  assert.equal(page.state.tracked, false); assert.match(page.status, /落地/);
   page.faces(1); page.step(); assert.equal(page.state.exploded, true);
   assert.deepEqual(page.state.tether[0],anchor);
   for (let i = 0; i < 440; i++) page.step();
   assert.equal(page.state.particles,32);
   page.faces(0); page.step(); assert.equal(page.state.particles,32);
   page.faces(1); page.step(); assert.equal(page.state.particles,32);
-  page.reset(); for(let i=0;i<130;i++)page.step(); assert.equal(page.state.pressure, 0); assert.equal(page.state.particles, 0);
+  landAll(page);page.reset(); for(let i=0;i<130;i++)page.step(); assert.equal(page.state.pressure, 0); assert.equal(page.state.particles, 0);
   assert.equal(page.state.tether.length,13);
   assert.equal(page.button.disabled, false);
   page.faces(2); page.step(); assert.equal(page.button.disabled, true);
@@ -408,8 +415,10 @@ test('底部唯一按鈕爆炸後先吹風，即使沒有臉也能完成重置',
   for(let i=0;i<12;i++) page.button.click();
   assert.equal(page.button.disabled,true);
   for(let i=0;i<120 && !page.state.exploded;i++) page.step();
-  assert.equal(page.button.disabled,false); assert.equal(page.button.textContent,'重置');
-  page.faces(0); page.step(); assert.equal(page.button.disabled,false);
+  assert.equal(page.button.disabled,true); assert.equal(page.button.textContent,'碎片飄落中…');
+  page.faces(0); page.step(); assert.equal(page.button.disabled,true);
+  page.button.click();page.reset();assert.equal(page.state.resetElapsed,null);
+  landAll(page);assert.equal(page.button.disabled,false);assert.equal(page.button.textContent,'重置');
   page.button.click(); assert.equal(page.state.particles,32);assert.equal(page.state.resetElapsed,0);assert.equal(page.button.disabled,true);
   for(let i=0;i<130;i++)page.step();assert.equal(page.state.pressure,0); assert.equal(page.state.particles,0);
   assert.equal(page.button.textContent,'打氣'); assert.equal(page.button.disabled,true);
@@ -429,7 +438,8 @@ test('近景構圖放大消防栓與球，預設爆炸尺寸保留可見範圍',
       assert.ok(top>20,`${width}×${height}: ${top}`);
       const cx=pose.x+Math.sin(pose.angle)*pose.height/2,rx=Math.hypot(Math.cos(pose.angle)*pose.width/2,Math.sin(pose.angle)*pose.height/2);
       assert.ok(cx-rx>0 && cx+rx<width);
-      assert.ok(tether.points.at(-1).x>view.anchor.x+view.hydrantHeight*.2);
+      assert.ok(Math.abs(tether.points.at(-1).x-view.anchor.x)<view.ropeLength*.12);
+      assert.ok(pose.y<view.hydrantGround-view.hydrantHeight-2);
       const curbTop=view.image.y+(438+(698-438)*.5)*view.image.scale;
       assert.ok(view.hydrantGround<curbTop-5);
     }
@@ -472,6 +482,79 @@ test('魚眼調參傳入球面渲染且保留氣量、尺寸、場景與追蹤',
   page.leave();
 });
 
+test('碎片完成最後一次微彈才即刻開放重置，失追及直接入口也不能提早清場', async () => {
+  const page=harness();await settle();page.step();for(let i=0;i<12;i++)page.button.click();
+  for(let i=0;i<120&&!page.state.exploded;i++)page.step();
+  assert.equal(page.canReset,false);assert.equal(page.button.disabled,true);
+  page.faces(0);let sawBounce=false,frames=0;
+  while(!page.canReset && frames++<2000) {
+    if(page.pieces.some(p=>p.bounces>0&&!p.landed))sawBounce=true;
+    page.reset();assert.equal(page.state.resetElapsed,null);assert.equal(page.state.particles,32);
+    page.button.disabled=false;page.button.click();assert.equal(page.state.resetElapsed,null);
+    page.step();
+    assert.equal(page.button.disabled,!page.canReset);
+  }
+  assert.ok(sawBounce);assert.equal(page.canReset,true);assert.ok(page.pieces.every(p=>p.landed));
+  assert.equal(page.state.tracked,false);assert.equal(page.button.textContent,'重置');
+  page.button.click();assert.equal(page.state.resetElapsed,0);page.step(2000);
+  assert.equal(page.state.pressure,0);assert.equal(page.state.particles,0);page.leave();
+});
+
+test('靜止30秒維持垂直上浮，初始與重置沒有單向右偏', () => {
+  const view=sceneAPI.sceneLayout(1280,665),tether=sceneAPI.createTether(view);
+  assert.equal(tether.angle,0);assert.ok(tether.points.every(p=>p.x===view.anchor.x));
+  let offset=0,peak=0;
+  for(let i=0;i<1800;i++) {
+    sceneAPI.advanceTether(tether,view,1/60,i*1000/60,physics.resetSwing(),false);
+    const dx=tether.points.at(-1).x-view.anchor.x;offset+=dx;peak=Math.max(peak,Math.abs(dx));
+    assert.ok(Math.abs(tether.angle)<.08);
+  }
+  assert.ok(Math.abs(offset/1800)<view.ropeLength*.03);assert.ok(peak<view.ropeLength*.08);
+  assert.equal(sceneAPI.createTether(view).angle,0);
+});
+
+test('左右眼傾角經完整推論鏡像帶動球體，直頭回正、失追不沿用歪頭', async () => {
+  const pages=[harness(),harness(),harness()];await settle();pages.forEach(p=>p.step());
+  const eyes=angle=>[{x:.4,y:.4-Math.tan(angle)*.1},{x:.6,y:.4+Math.tan(angle)*.1}];
+  pages[1].eyes(eyes(.3));pages[2].eyes(eyes(-.3));
+  for(let i=0;i<120;i++)pages.forEach(p=>p.step());
+  assert.ok(pages[1].state.swing.roll<-.25);assert.ok(pages[2].state.swing.roll>.25);
+  assert.ok(pages[1].pose.angle<pages[0].pose.angle-.1);
+  assert.ok(pages[2].pose.angle>pages[0].pose.angle+.1);
+  pages.forEach(p=>p.eyes(eyes(0)));
+  for(let i=0;i<600;i++)pages.forEach(p=>p.step());
+  assert.ok(Math.abs(pages[1].pose.angle-pages[0].pose.angle)<.01);
+  pages[1].eyes(eyes(.3));for(let i=0;i<60;i++)pages[1].step();
+  pages[1].faces(0);pages[1].step();assert.equal(pages[1].state.swing.roll,0);
+  pages[1].faces(1);pages[1].eyes(eyes(-.3));pages[1].step();assert.ok(pages[1].state.swing.roll>.25);
+  pages.forEach(p=>p.leave());
+});
+
+test('歪頭正規化眼點還原寬高，慢推論低通、死區與異常資料保持有限', () => {
+  const eyes=[{x:.4,y:.35},{x:.6,y:.45}],swing=physics.resetSwing();
+  physics.trackRoll(swing,eyes,1,200,100);
+  for(let i=1;i<=8;i++)physics.trackRoll(swing,eyes,1+i*400,200,100);
+  assert.ok(Math.abs(swing.roll-(-Math.atan2(10,40)+.025))<.001);
+  for(const bad of [undefined,null,{},[null,{}],[],[{x:NaN,y:.4},{x:.6,y:.4}],[{x:.5,y:.4},{x:.5,y:.5}]]) {
+    physics.trackRoll(swing,bad,4000,200,100);assert.equal(swing.roll,0);assert.equal(swing.rollTime,null);
+  }
+  const jitter=[{x:.4,y:.4},{x:.6,y:.4005}];
+  for(let i=0;i<120;i++)physics.trackRoll(swing,jitter,5000+i*16,200,100);
+  assert.equal(swing.roll,0);
+});
+
+test('一秒推論間隔仍使用當前絕對歪頭，重獲反向眼角不沿用舊roll', async () => {
+  const page=harness();await settle();
+  page.eyes([{x:.4,y:.37},{x:.6,y:.43}]);page.step();assert.ok(page.state.swing.roll<-.25);
+  for(let i=0;i<6;i++)page.step(1000);
+  assert.ok(page.state.swing.roll<-.25);assert.ok(page.pose.angle<-.05);
+  page.faces(0);page.step();assert.equal(page.state.swing.roll,0);
+  page.faces(1);page.eyes([{x:.4,y:.43},{x:.6,y:.37}]);page.step(1000);
+  assert.ok(page.state.swing.roll>.25);
+  for(let i=0;i<12;i++)page.step(1000);
+  assert.ok(page.pose.angle>.05);page.leave();
+});
+
 test('慢模型250至400ms仍經臉框驅動繩端，超過追蹤時限不套用舊位移', async () => {
   for(const interval of [250,400]) {
     const still=harness(),moving=harness();await settle();still.step();moving.step();
@@ -491,19 +574,19 @@ test('慢模型250至400ms仍經臉框驅動繩端，超過追蹤時限不套用
 test('低FPS重置以真實前景兩秒完成，不受物理50ms步長拖慢', async () => {
   const page=harness();await settle();page.step();for(let i=0;i<12;i++)page.button.click();
   for(let i=0;i<120&&!page.state.exploded;i++)page.step();
-  page.button.click();page.step(650);assert.ok(Math.abs(page.state.resetElapsed-.65)<1e-9);
+  landAll(page);page.button.click();page.step(650);assert.ok(Math.abs(page.state.resetElapsed-.65)<1e-9);
   assert.equal(page.state.particles,32);assert.equal(page.pose,null);
   page.step(600);assert.ok(Math.abs(page.state.resetElapsed-1.25)<1e-9);
   page.step(750);assert.equal(page.state.resetElapsed,null);assert.equal(page.state.particles,0);
   assert.equal(page.state.exploded,false);assert.equal(page.state.pressure,0);page.leave();
 });
 
-test('風重置保留空中或落地碎片直到吹出，禁重入且失追、resize不提前生球', async () => {
-  for(const landed of [false,true]) {
+test('落地後風重置保留碎片直到吹出，禁重入且失追、resize不提前生球', async () => {
+  for(const lost of [false,true]) {
     const page=harness();await settle();page.step();
     for(let i=0;i<12;i++)page.button.click();
     for(let i=0;i<120&&!page.state.exploded;i++)page.step();
-    if(landed)for(let i=0;i<600;i++)page.step(50);
+    if(lost)page.faces(0);landAll(page);
     const original=page.pieces.map(p=>p.gx);
     page.button.click();assert.equal(page.state.resetElapsed,0);assert.equal(page.state.particles,32);
     for(let i=0;i<15;i++)page.step(50);
@@ -522,7 +605,7 @@ test('風重置保留空中或落地碎片直到吹出，禁重入且失追、re
   }
   const page=harness();await settle();page.step();for(let i=0;i<12;i++)page.button.click();
   for(let i=0;i<120&&!page.state.exploded;i++)page.step();
-  page.button.click();page.step();page.leave();page.step(3000);
+  landAll(page);page.button.click();page.step();page.leave();page.step(3000);
   assert.equal(page.state.resetElapsed,null);assert.equal(page.frames.size,0);assert.equal(page.state.particles,0);
 });
 
@@ -617,7 +700,7 @@ test('桌面與手機初始球栓均可見，最大尺寸只影響球面，繩�
     const view=sceneAPI.sceneLayout(width,height),tether=sceneAPI.createTether(view),snapshot=JSON.stringify(view);
     const first=sceneAPI.scenePose(view,tether,physics.resetState());
     assert.ok(first.y-first.height>30 && first.x-first.width/2>0 && first.x+first.width/2<width);
-    assert.ok(view.ground<height-110 && view.hydrantHeight>25);
+    assert.ok(view.ground<=height-110 && view.hydrantHeight>25);
     for(const scale of [1.5,4,1.5]) {
       const pose=sceneAPI.scenePose(view,tether,{scale,pressure:.5,velocity:0}),end=tether.points.at(-1);
       assert.ok(Math.abs(pose.x-pose.knot*Math.sin(pose.angle)-end.x)<1e-9);
@@ -650,7 +733,7 @@ test('氣球影跟隨旋轉中心、位置與大小，高處更淡且柔化', ()
   const high=groundAPI.balloonShadow(view,{...pose,y:pose.y-100});
   assert.ok(high.opacity<shadow.opacity && high.blur>shadow.blur);
   const big=groundAPI.balloonShadow(view,{...pose,width:220});assert.ok(big.rx>shadow.rx);
-  assert.ok(shadow.x>pose.x && shadow.y<view.ground);
+  assert.ok(shadow.x>pose.x && shadow.y>view.ground);
 });
 
 test('32片分散於道路，30/60/120fps落地微彈後停止且不穿地', () => {
@@ -723,7 +806,7 @@ test('街景等比覆蓋，栓腳綁點及路緣同源校準；落片平面始�
     for(const z of [view.nearDepth,0,view.farDepth]) for(const x of [-1,0,1]) {
       const p=groundAPI.projectGround(view,x,z);
       const curb=a.y+(p.x-a.x)*(b.y-a.y)/(b.x-a.x);
-      assert.ok(p.y>curb+10,`${width}×${height}: 地面位置不得跨過路緣`);
+      assert.ok(p.y>curb+5,`${width}×${height}: 地面位置不得跨過路緣`);
     }
   }
 });

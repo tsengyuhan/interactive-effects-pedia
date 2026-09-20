@@ -15,7 +15,7 @@ export function unprojectAir(view,x,y,z=0) {
 export function balloonShadow(view,pose) {
   const center={x:pose.x+Math.sin(pose.angle)*pose.height/2,y:pose.y-Math.cos(pose.angle)*pose.height/2};
   const world=unprojectAir(view,center.x,center.y);
-  const point=projectGround(view,world.x+world.height*.32,world.height*.32);
+  const point=projectGround(view,world.x+world.height*.32,-world.height*.16);
   return {...point,rx:pose.width*.47*point.scale,ry:pose.width*.47*point.scale*view.depthScale,
     opacity:.52/(1+world.height*.45),blur:(2+world.height*5)*view.unit/350};
 }
@@ -101,7 +101,7 @@ export function drawBalloonShadow(ctx,view,pose) {
 
 export function drawShardShadow(ctx,view,piece) {
   if(piece.height>.35) return;
-  const point=projectGround(view,piece.gx+piece.height*.32,piece.gz+piece.height*.32),size=point.scale/piece.initialScale*view.unit/piece.unit;
+  const point=projectGround(view,piece.gx+piece.height*.32,piece.gz-piece.height*.16),size=point.scale/piece.initialScale*view.unit/piece.unit;
   ctx.save();clipRoad(ctx,view);ctx.translate(point.x,point.y);ctx.scale(size,size);
   ctx.transform(1,view.roadSlope,piece.gx*view.perspective*point.scale,
     (view.depthScale+view.roadSlope*piece.gx*view.perspective)*point.scale,0,0);ctx.rotate(piece.angle);

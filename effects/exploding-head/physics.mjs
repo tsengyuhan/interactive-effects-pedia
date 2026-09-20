@@ -145,7 +145,25 @@ export function splitMask(data, mw, mh, width, height, head, bodyRGBA, headRGBA,
   }
 }
 
-export function resetSwing() { return { angle:0,velocity:0,previousX:null,previousTime:0 }; }
+export function resetSwing() { return { angle:0,velocity:0,previousX:null,previousTime:0,roll:0,rollTime:null }; }
+
+export function trackRoll(swing,keypoints,now,frameWidth,frameHeight) {
+  const eyes=Array.isArray(keypoints)?keypoints.slice(0,2):null;
+  if(!eyes || eyes.length!==2 || !eyes.every(p=>p&&Number.isFinite(p.x)&&Number.isFinite(p.y)&&p.x>=0&&p.x<=1&&p.y>=0&&p.y<=1)) {
+    swing.roll=0;swing.rollTime=null;return;
+  }
+  const [left,right]=eyes[0].x<eyes[1].x?eyes:[eyes[1],eyes[0]];
+  const dx=(right.x-left.x)*frameWidth,dy=(right.y-left.y)*frameHeight;
+  if(dx<frameWidth*.025) {swing.roll=0;swing.rollTime=null;return;}
+  // 眼睛座標分別按影格寬高正規化；先還原比例，再以自拍鏡像方向歪頭。
+  const angle=clamp(-Math.atan2(dy,dx),-.5,.5);
+  const target=Math.abs(angle)<.025?0:angle-Math.sign(angle)*.025;
+  const dt=swing.rollTime===null?0:(now-swing.rollTime)/1000;
+  // 傾角是當下的絕對姿態，低FPS或重獲時可直接使用；繩索本身仍漸進回應。
+  if(dt<=0 || dt>=.75) swing.roll=target;
+  else swing.roll+=(target-swing.roll)*(1-Math.exp(-8*dt));
+  swing.rollTime=now;
+}
 
 export function trackSwing(swing, x, now, frameWidth) {
   const dt=(now-swing.previousTime)/1000;
