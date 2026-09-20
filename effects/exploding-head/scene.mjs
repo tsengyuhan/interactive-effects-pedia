@@ -1,12 +1,41 @@
 import { clamp } from './physics.mjs';
 
+export function createStreetAssets(document) {
+  let released=false;
+  const pending=[],images=[],timers=[];
+  const load=path=>new Promise((resolve,reject)=>{
+    const image=document.createElement('img');images.push(image);pending.push(reject);
+    const timer=setTimeout(()=>reject(new Error(`Street image timed out: ${path}`)),15000);timers.push(timer);
+    image.onload=()=>{clearTimeout(timer);if(!released)resolve(image);};
+    image.onerror=()=>{clearTimeout(timer);reject(new Error(`Street image unavailable: ${path}`));};
+    image.src=path;
+  });
+  const assets={street:null,hydrant:null,ready:null,release(){
+    if(released)return;released=true;timers.forEach(clearTimeout);
+    images.forEach(image=>{image.onload=image.onerror=null;image.removeAttribute('src');});
+    pending.forEach(reject=>reject(new Error('Street images released')));
+    assets.street=assets.hydrant=null;
+  }};
+  assets.ready=Promise.all([load('./street.png'),load('./hydrant.png')]).then(([street,hydrant])=>{
+    if(!released){assets.street=street;assets.hydrant=hydrant;}
+  });
+  return assets;
+}
+
 // 構圖只依視窗，鏡頭距離、氣量與最大尺寸都不改變消防栓大小。
-export function sceneLayout(width, height) {
-  const ground=Math.max(145,height-(height<500?150:178));
-  const span=Math.max(100,ground-74), unit=Math.min(span, width*1.18);
-  const hydrantHeight=unit*.28, x=width*.53;
-  return { width,height,ground,x,hydrantHeight,baseSize:unit*.205,
-    anchor:{x:x+hydrantHeight*.21,y:ground-hydrantHeight*.61}, ropeLength:unit*.30 };
+export function sceneLayout(width,height) {
+  const span=Math.max(100,height-(height<500?150:178)-74),unit=Math.min(span,width*1.18);
+  const imageScale=Math.max(width/1536,height/1024);
+  const imageX=(width-1536*imageScale)/2;
+  const imageY=clamp(height-(height<500?140:175)-720*imageScale,height-1024*imageScale,0);
+  const x=imageX+768*imageScale,hydrantGround=imageY+525*imageScale;
+  const ground=imageY+675*imageScale,hydrantHeight=unit*.28,hydrantScale=hydrantHeight/1464;
+  return {width,height,x,ground,hydrantGround,tetherGround:hydrantGround,unit,
+    image:{x:imageX,y:imageY,scale:imageScale},perspective:.5,depthScale:.32,roadSlope:269/1536,
+    nearDepth:-.14,farDepth:.16,
+    road:[{x:imageX,y:imageY+486*imageScale},{x:imageX+1536*imageScale,y:imageY+755*imageScale},
+      {x:width,y:height},{x:0,y:height}],hydrantHeight,hydrantScale,baseSize:unit*.13,
+    anchor:{x:x+(775-516)*hydrantScale,y:hydrantGround+(635-1460)*hydrantScale},ropeLength:unit*.16};
 }
 
 export function createTether(view) {
@@ -41,7 +70,7 @@ export function advanceTether(tether, view, dt, time, swing, exploded) {
         a.x+=dx*correction*wa/(wa+wb); a.y+=dy*correction*wa/(wa+wb);
         b.x-=dx*correction*wb/(wa+wb); b.y-=dy*correction*wb/(wa+wb);
         // 路面吸收落繩，避免穿出畫面。
-        if(b.y>view.ground-3) { b.y=view.ground-3; b.py=b.y; }
+        if(b.y>view.tetherGround-2) { b.y=view.tetherGround-2; b.py=b.y; }
       }
     }
     points[0].x=points[0].px=view.anchor.x; points[0].y=points[0].py=view.anchor.y;
@@ -64,46 +93,24 @@ function ellipse(ctx,x,y,rx,ry,color) {
   ctx.fillStyle=color; ctx.beginPath(); ctx.ellipse(x,y,rx,ry,0,0,Math.PI*2); ctx.fill();
 }
 
-export function drawStreet(ctx,view) {
-  const {width,height,ground,x,hydrantHeight:h}=view;
-  const curb=ground+h*.2;
-  ctx.fillStyle='rgba(157,170,162,.28)'; ctx.fillRect(0,ground-h*.42,width,height);
-  ctx.fillStyle='#c5ccc7'; ctx.fillRect(0,curb,width,height-curb);
-  ctx.fillStyle='#939f9a'; ctx.fillRect(0,curb,h*.03+width,h*.12);
-  ctx.fillStyle='#b5bfb9'; ctx.fillRect(0,curb+h*.12,width,height-curb);
-  ctx.strokeStyle='rgba(91,111,99,.17)'; ctx.lineWidth=1;
-  ctx.beginPath();
-  for(let i=-3;i<4;i++) {const sx=x+i*h*1.65;ctx.moveTo(sx,ground-h*.42);ctx.lineTo(sx+h*.4,curb);}
-  ctx.stroke();
-  ellipse(ctx,x+h*.13,ground+h*.035,h*.61,h*.13,'rgba(33,48,39,.12)');
-  ellipse(ctx,x+h*.02,ground+h*.015,h*.35,h*.07,'rgba(33,48,39,.16)');
+export function drawStreet(ctx,view,assets,background) {
+  if(!assets?.street)return;
+  const image=view.image,h=view.hydrantHeight;
+  ctx.drawImage(assets.street,image.x,image.y,1536*image.scale,1024*image.scale);
+  ctx.save();ctx.globalAlpha=.08;ctx.globalCompositeOperation='color';ctx.fillStyle=background;
+  ctx.fillRect(0,0,view.width,view.height);ctx.restore();
+  ctx.save();ctx.filter=`blur(${Math.max(1,h*.025)}px)`;
+  ellipse(ctx,view.x+h*.21,view.hydrantGround-h*.04,h*.42,h*.10,'rgba(25,27,30,.19)');
+  ctx.restore();
+  ellipse(ctx,view.x,view.hydrantGround,h*.23,h*.035,'rgba(25,27,30,.3)');
 }
 
-export function drawHydrant(ctx,view) {
-  const h=view.hydrantHeight;
-  ctx.save(); ctx.translate(view.x,view.ground); ctx.scale(h,h);
-  const red=ctx.createLinearGradient(-.3,0,.31,0);
-  red.addColorStop(0,'#8c2622');red.addColorStop(.27,'#e77a62');red.addColorStop(.48,'#c44839');red.addColorStop(1,'#71231e');
-  const cap=ctx.createLinearGradient(-.24,-1.04,.22,-.7);
-  cap.addColorStop(0,'#ef9277');cap.addColorStop(.45,'#c9513e');cap.addColorStop(1,'#882c25');
-  // 出水管在柱體後方，前方蓋與環箍在其後繪製。
-  ctx.fillStyle=red;ctx.fillRect(-.45,-.65,.88,.22);
-  ellipse(ctx,-.44,-.54,.085,.145,'#74251f');ellipse(ctx,-.46,-.54,.063,.11,'#bc5343');
-  ellipse(ctx,.42,-.54,.085,.145,'#6a241f');ellipse(ctx,.4,-.54,.055,.112,'#a34132');
-  ctx.fillStyle=red;ctx.fillRect(-.23,-.83,.46,.74);
-  ellipse(ctx,0,-.1,.31,.073,'#772720');ctx.fillStyle=red;ctx.fillRect(-.31,-.1,.62,.07);
-  ellipse(ctx,0,-.03,.31,.07,'#b44938');ellipse(ctx,0,-.095,.31,.057,red);
-  ctx.fillStyle=cap;ctx.beginPath();ctx.moveTo(-.25,-.8);ctx.bezierCurveTo(-.25,-1.11,.21,-1.14,.25,-.8);ctx.closePath();ctx.fill();
-  ellipse(ctx,0,-.81,.28,.058,'#823329');ellipse(ctx,0,-.836,.28,.048,red);
-  ctx.fillStyle='#a43d30';ctx.fillRect(-.047,-1.077,.094,.055);ellipse(ctx,0,-1.077,.047,.023,'#ef9c7e');
-  ellipse(ctx,.005,-.535,.162,.163,'#732c25');ellipse(ctx,-.012,-.549,.147,.147,'#d1614b');
-  ellipse(ctx,-.012,-.549,.115,.115,'#a84031');
-  ctx.beginPath();for(let i=0;i<6;i++){const a=i*Math.PI/3;const x=-.012+Math.cos(a)*.055,y=-.549+Math.sin(a)*.055;if(i)ctx.lineTo(x,y);else ctx.moveTo(x,y);}ctx.closePath();ctx.fillStyle='#e18867';ctx.fill();
-  ctx.strokeStyle='rgba(255,226,183,.35)';ctx.lineWidth=.016;ctx.beginPath();ctx.moveTo(-.14,-.37);ctx.lineTo(-.14,-.18);ctx.stroke();
-  for(const bx of [-.23,.23]) ellipse(ctx,bx,-.086,.023,.013,'#f0a67f');
-  // 繩圈繞住側管，後段被金屬蓋遮擋，前段銜接固定綁點。
-  ctx.strokeStyle='#d9cbae';ctx.lineWidth=.014;ctx.beginPath();ctx.ellipse(.23,-.565,.038,.113,-.18,-1.7,1.6);ctx.stroke();
-  ctx.restore();
+export function drawHydrant(ctx,view,assets) {
+  if(!assets?.hydrant)return;
+  const s=view.hydrantScale;
+  ctx.drawImage(assets.hydrant,view.x-516*s,view.hydrantGround-1460*s,1024*s,1536*s);
+  ctx.save();ctx.strokeStyle='#b8a88b';ctx.lineWidth=Math.max(.7,view.baseSize*.011);
+  ctx.beginPath();ctx.ellipse(view.anchor.x-2*s,view.anchor.y+37*s,12*s,48*s,-.15,-1.7,1.7);ctx.stroke();ctx.restore();
 }
 
 export function drawTether(ctx,tether,view,pose) {

@@ -1,5 +1,6 @@
-import { MAX_SCALE, resetState, pump, advance, estimateHead, fractureBalloon, advanceShard, resetSwing, trackSwing, advanceSwing } from './physics.mjs';
-import { sceneLayout,createTether,advanceTether,scenePose,drawStreet,drawHydrant,drawTether } from './scene.mjs';
+import { MAX_SCALE, resetState, pump, advance, estimateHead, fractureBalloon, resetSwing, trackSwing, advanceSwing } from './physics.mjs';
+import { createStreetAssets,sceneLayout,createTether,advanceTether,scenePose,drawStreet,drawHydrant,drawTether } from './scene.mjs';
+import { placeShard,advanceGroundShard,shardPose,clipRoad,drawBalloonShadow,drawShardShadow } from './ground.mjs';
 import { createBalloon } from './balloon.mjs';
 
 const shell = Shell.init({ id: 'exploding-head' });
@@ -28,7 +29,7 @@ let raf = 0, lastTime = 0, lastVideoTime = -1, lastFrameAt = 0;
 let width = 1, height = 1, dpr = 1, cameraTimer = 0, startupTimer = 0;
 let particles = [], lastPose = null, statusKey = '';
 let scene=null,tether=null,hasTexture=false,cameraWidth=0,cameraHeight=0;
-let balloon;
+let balloon,streetAssets;
 
 const controls = document.createElement('div');
 controls.className = 'exploding-controls';
@@ -179,35 +180,46 @@ function layout() { return scene || sceneLayout(width,height); }
 
 function headPose() { return scenePose(scene,tether,state); }
 
-function draw(now) {
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = background; ctx.fillRect(0, 0, width, height);
-  if(scene && tether) {
-    drawStreet(ctx,scene);
-    const visible=hasTexture && !state.exploded && !stopped;
-    lastPose=visible?headPose():null;
-    drawTether(ctx,tether,scene,lastPose);
-    drawHydrant(ctx,scene);
-    if(lastPose) {
-      ctx.save();ctx.translate(lastPose.x,lastPose.y);ctx.rotate(lastPose.angle);
-      ctx.drawImage(balloon.render(state.pressure),-lastPose.width/2,-lastPose.height,lastPose.width,lastPose.height);
-      ctx.restore();
-    }
+function drawPiece(piece) {
+  const projected=shardPose(scene,piece),air=projected.airborne;
+  ctx.save();
+  if(piece.landed) clipRoad(ctx,scene);
+  ctx.translate(projected.x,projected.y);
+  // 落地時把薄片方向攤在路面平面，深度縮短與場景透視相同。
+  ctx.scale(projected.size,projected.size);
+  if(air<1) ctx.transform(1,scene.roadSlope*(1-air),piece.gx*scene.perspective*(1-air)*projected.scale,
+    air+(1-air)*(scene.depthScale+scene.roadSlope*piece.gx*scene.perspective)*projected.scale,0,0);
+  ctx.rotate(piece.angle);
+  ctx.scale(air*Math.cos(piece.flip)+1-air,air*Math.cos(piece.tilt)+1-air);
+  ctx.beginPath();
+  piece.polygon.forEach((point,i) => { if(i) ctx.lineTo(point.x,point.y); else ctx.moveTo(point.x,point.y); });
+  ctx.closePath();ctx.clip();
+  ctx.drawImage(debris.canvas,-piece.offsetX,-piece.offsetY,piece.width,piece.textureHeight);
+  if(Math.cos(piece.flip)*Math.cos(piece.tilt)<0) {
+    ctx.fillStyle='rgba(46,30,22,0.28)';ctx.fillRect(-piece.offsetX,-piece.offsetY,piece.width,piece.textureHeight);
   }
-  for (const piece of particles) {
-    ctx.save(); ctx.globalAlpha = Math.min(1, Math.max(0, (piece.life - piece.age) / 1.1));
-    ctx.translate(piece.x, piece.y); ctx.rotate(piece.angle);
-    ctx.scale(Math.cos(piece.flip), Math.cos(piece.tilt));
-    ctx.beginPath();
-    piece.polygon.forEach((point,i) => { if(i) ctx.lineTo(point.x,point.y); else ctx.moveTo(point.x,point.y); });
-    ctx.closePath(); ctx.clip();
-    ctx.drawImage(debris.canvas, -piece.offsetX, -piece.offsetY, piece.width, piece.height);
-    // 背面較暗，翻面時會收成細線，呈現薄膜厚度。
-    if(Math.cos(piece.flip)*Math.cos(piece.tilt)<0) {
-      ctx.fillStyle='rgba(46,30,22,0.28)'; ctx.fillRect(-piece.offsetX,-piece.offsetY,piece.width,piece.height);
-    }
+  ctx.restore();
+}
+
+function draw(now) {
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle=background;ctx.fillRect(0,0,width,height);
+  if(!scene || !tether) return;
+  drawStreet(ctx,scene,streetAssets,background);
+  const visible=hasTexture && !state.exploded && !stopped;
+  lastPose=visible?headPose():null;
+  if(lastPose) drawBalloonShadow(ctx,scene,lastPose);
+  for(const piece of particles) drawShardShadow(ctx,scene,piece);
+  const ordered=[...particles].sort((a,b)=>b.gz-a.gz);
+  for(const piece of ordered) if(piece.gz>=0) drawPiece(piece);
+  drawTether(ctx,tether,scene,lastPose);
+  drawHydrant(ctx,scene,streetAssets);
+  if(lastPose) {
+    ctx.save();ctx.translate(lastPose.x,lastPose.y);ctx.rotate(lastPose.angle);
+    ctx.drawImage(balloon.render(state.pressure),-lastPose.width/2,-lastPose.height,lastPose.width,lastPose.height);
     ctx.restore();
   }
+  for(const piece of ordered) if(piece.gz<0) drawPiece(piece);
 }
 
 function explode() {
@@ -220,7 +232,7 @@ function explode() {
   particles=fractureBalloon().map(cell => {
     const dx=cell.center.x*w/2, dy=(cell.center.y-1)*h/2;
     const mass=.8+Math.random()*.6;
-    return {
+    return placeShard(scene,{
       polygon:cell.polygon.map(p=>({x:(p.x-cell.center.x)*w/2,y:(p.y-cell.center.y)*h/2})),
       x:centerX+dx*cosine-dy*sine, y:centerY+dx*sine+dy*cosine,
       width:w,height:h,offsetX:(cell.center.x+1)*w/2,offsetY:(cell.center.y+1)*h/2,
@@ -228,8 +240,8 @@ function explode() {
       angle,spin:(Math.random()-.5)*3.8,flip:0,tilt:0,
       flipSpeed:(Math.random()>.5?1:-1)*(2+Math.random()*4),tiltSpeed:(Math.random()-.5)*3,
       drag:(.7+Math.sqrt(cell.area)*1.3)/mass,phase:Math.random()*Math.PI*2,
-      age:0,life:4.6+Math.random()*2.1
-    };
+      age:0
+    },(Math.random()-.5)*.1);
   });
   sound(true); updateUI();
 }
@@ -246,8 +258,7 @@ function tick(now) {
     if (ready && now - lastFrameAt > 750) { tracked = false; swing=resetSwing(); updateUI(); }
     if(tracked) advanceSwing(swing,dt);
     if(scene && tether) advanceTether(tether,scene,dt,now,swing,state.exploded);
-    for (const piece of particles) advanceShard(piece, dt);
-    particles = particles.filter(piece => piece.age < piece.life);
+    for (const piece of particles) advanceGroundShard(piece,dt,scene);
     // 先計算上限附近的繪圖姿態，再用同一姿態切成碎片。
     const burst = advance(state, dt, tracked,maxScale);
     if (burst) {
@@ -272,6 +283,7 @@ function release() {
   if (audio) { try { void audio.close().catch(() => {}); } catch {} audio = null; }
   particles = []; headPixels = null; hasTexture=false;
   balloon?.release(); balloon = null;
+  streetAssets?.release();streetAssets=null;
   for (const layer of [frame, headLayer, headMask, debris]) layer.canvas.width = layer.canvas.height = 1;
   window.removeEventListener('resize', resize);
   document.removeEventListener('visibilitychange', visibility);
@@ -327,11 +339,14 @@ async function start() {
   shell.showLoading(t('正在準備攝影機與本地模型…'));
   try { balloon = createBalloon(document); }
   catch (error) { fail(error, '無法建立 3D 氣球，請啟用瀏覽器硬體加速，並使用 Chrome／Edge 重新整理。'); return; }
+  streetAssets=createStreetAssets(document);
+  const assetsReady=streetAssets.ready.catch(error=>fail(error,'街景素材載入失敗，請確認街景及消防栓圖片完整後重新整理。'));
   try { await camera(); }
   catch (error) {
     fail(error, '無法開啟攝影機，請允許攝影機權限、關閉占用相機的程式，再經 start.bat 或 HTTPS 開啟並重新整理。');
     return;
   }
+  await assetsReady;
   if (stopped) return;
   watchStartup();
   try {

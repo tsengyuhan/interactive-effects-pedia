@@ -76,6 +76,8 @@
     "等待手機配對": "Waiting for a phone",
     "手機已離線，等待重新配對": "Phone offline. Waiting to pair again",
     "消防栓上的臉部氣球": "A face balloon tied to a fire hydrant",
+    "寫實街景共用地面透視：氣球有隨動投影，爆炸薄片飄落路面並停留；重置重新綁好，消防栓比例不變。": "A realistic street shares one ground perspective: the balloon casts a moving shadow, and popped flakes settle on the road until reset. Reset restores the tether without resizing the hydrant.",
+    "街景素材載入失敗，請確認街景及消防栓圖片完整後重新整理。": "The street scene could not load. Check that the street and hydrant images are complete, then refresh.",
     "追蹤遺失，氣球已爆炸；按重置再玩一次。": "Tracking lost; the balloon has popped. Press Reset to play again.",
     "請一個人正對鏡頭，讓五官完整入鏡。": "Face the camera alone with all facial features in view.",
     "砰！碎片飄落，繩子垂下；按重置再玩一次。": "Pop! The pieces flutter down and the string falls. Press Reset to play again.",

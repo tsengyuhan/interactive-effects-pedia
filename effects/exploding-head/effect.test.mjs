@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import * as physics from './physics.mjs';
 import * as sceneAPI from './scene.mjs';
+import * as groundAPI from './ground.mjs';
 import { createBalloon, fillTexture } from './balloon.mjs';
 
 const source = fs.readFileSync(new URL('./effect.js', import.meta.url), 'utf8');
@@ -118,7 +119,8 @@ function harness(options = {}) {
   const container = element('div'); container.clientWidth = 800; container.clientHeight = 600;
   let extraButtons=0;
   const context = {
-    ...physics,...sceneAPI, modelAPI,fillTexture,
+    ...physics,...sceneAPI,...groundAPI,modelAPI,fillTexture,
+    createStreetAssets() {return {street:element('img'),hydrant:element('img'),ready:options.assetFailed?Promise.reject(new Error('missing street')):Promise.resolve(),release(){counts.assets=(counts.assets||0)+1;}};},
     createBalloon(document) {
       if (options.noWebGL) throw new Error('WebGL unavailable');
       const canvas=document.createElement('canvas');
@@ -142,6 +144,9 @@ function harness(options = {}) {
   vm.runInContext(source.replace(/^import[^\n]+\n/gm, '').replace("import('../../libs/mediapipe/vision_bundle.mjs')", 'Promise.resolve(modelAPI)'), sandbox);
   return {
     counts, timers, frames, errors, stream, segmenter, detector,params,
+    get pieces() { return vm.runInContext('particles.map(p=>({...p}))',sandbox); },
+    get sceneImages() {return vm.runInContext('[streetAssets?.street,streetAssets?.hydrant]',sandbox);},
+    get drawnImageSizes() {return elements.find(el=>el.className==='exploding-stage').draws.filter(args=>args.length===5).map(args=>args.slice(3));},
     get extraButtons() { return extraButtons; },
     get button() { return elements.find(el => el.className === 'exploding-pump'); },
     get status() { return elements.find(el => el.className === 'exploding-status').textContent; },
@@ -198,9 +203,9 @@ test('完整互動：載入禁用、同幀不重推論、爆炸後追蹤／失�
   page.faces(1); page.step(); assert.equal(page.state.exploded, true);
   assert.deepEqual(page.state.tether[0],anchor);
   for (let i = 0; i < 440; i++) page.step();
-  assert.equal(page.drawCount, 0);
-  page.faces(0); page.step(); assert.equal(page.drawCount, 0);
-  page.faces(1); page.step(); assert.equal(page.drawCount, 0);
+  assert.equal(page.state.particles,32);
+  page.faces(0); page.step(); assert.equal(page.state.particles,32);
+  page.faces(1); page.step(); assert.equal(page.state.particles,32);
   page.reset(); assert.equal(page.state.pressure, 0); assert.equal(page.state.particles, 0);
   assert.equal(page.state.tether.length,13);
   assert.equal(page.button.disabled, false);
@@ -290,7 +295,7 @@ test('效果內中文 UI（含動態狀態及 shell 標籤）都有英文翻譯'
 
 test('效果依賴僅引用存在的本地檔案', () => {
   assert.doesNotMatch(source, /https?:\/\//);
-  for (const path of ['./physics.mjs', './balloon.mjs', './scene.mjs', '../../libs/mediapipe/vision_bundle.mjs', '../../libs/mediapipe/selfie_segmenter.tflite', '../../libs/mediapipe/blaze_face_short_range.tflite', '../../libs/mediapipe/wasm/vision_wasm_internal.wasm', '../../libs/mediapipe/wasm/vision_wasm_nosimd_internal.wasm']) {
+  for (const path of ['./physics.mjs', './balloon.mjs', './scene.mjs','./ground.mjs','./street.png','./hydrant.png', '../../libs/mediapipe/vision_bundle.mjs', '../../libs/mediapipe/selfie_segmenter.tflite', '../../libs/mediapipe/blaze_face_short_range.tflite', '../../libs/mediapipe/wasm/vision_wasm_internal.wasm', '../../libs/mediapipe/wasm/vision_wasm_nosimd_internal.wasm']) {
     assert.ok(fs.existsSync(new URL(path, import.meta.url)), path);
   }
 });
@@ -454,14 +459,15 @@ test('實心球貼圖以有效前景RGB補滿所有alpha，不把背景綠色帶
 
 
 
-test('主畫布只畫球面及凍結球面碎片，從不輸出相機或人像圖層', async () => {
+test('主畫布只畫本地街景、消防栓與球面碎片，從不輸出相機或人像圖層', async () => {
   const page=harness();await settle();page.step();
-  assert.ok(page.drawSources.length===1 && page.drawSources[0]===page.ballCanvas);
-  page.faces(0);page.step();assert.deepEqual(page.drawSources,[page.ballCanvas]);
+  const foreground=()=>page.drawSources.filter(source=>!page.sceneImages.includes(source));
+  assert.deepEqual(foreground(),[page.ballCanvas]);
+  page.faces(0);page.step();assert.deepEqual(foreground(),[page.ballCanvas]);
   page.faces(1);page.step();for(let i=0;i<12;i++)page.button.click();
   for(let i=0;i<120&&!page.state.exploded;i++)page.step();
-  assert.ok(page.drawSources.length>1);assert.ok(page.drawSources.every(source=>source===page.drawSources[0]));
-  assert.notEqual(page.drawSources[0],page.ballCanvas);page.leave();
+  assert.equal(foreground().length,32);assert.ok(foreground().every(source=>source===foreground()[0]));
+  assert.notEqual(foreground()[0],page.ballCanvas);page.leave();
 });
 
 test('繩索固定消防栓端點、維持段長與有限值，移頭帶動受限甩動', () => {
@@ -504,6 +510,106 @@ test('桌面與手機初始球栓均可見，最大尺寸只影響球面，繩�
       assert.ok(Math.abs(pose.y+pose.knot*Math.cos(pose.angle)-end.y)<1e-9);
       assert.equal(JSON.stringify(view),snapshot);
       assert.ok(pose.width>first.width);
+    }
+  }
+});
+
+
+test('共享地面投影深度縮小，空中位置反推再投影與爆炸前對齊', () => {
+  const view=sceneAPI.sceneLayout(1280,665);
+  for(const z of [-.2,0,.5]) for(const angle of [-.4,0,.4]) {
+    const pose=sceneAPI.scenePose(view,sceneAPI.createTether(view),{scale:2.3,pressure:.9,velocity:0});
+    const piece={x:pose.x+Math.sin(angle)*pose.height/2,y:pose.y-Math.cos(angle)*pose.height/2,
+      vx:180,vy:-100,phase:.5,width:pose.width};
+    const placed=groundAPI.placeShard(view,piece,z),p=groundAPI.shardPose(view,placed);
+    assert.ok(Math.hypot(p.x-piece.x,p.y-piece.y)<1e-9);assert.ok(Math.abs(p.size-1)<1e-9);
+  }
+  assert.ok(groundAPI.projectGround(view,0,.5).scale<groundAPI.projectGround(view,0,0).scale);
+  assert.deepEqual(groundAPI.projectGround(view,0,0),{x:view.x,y:view.ground,scale:1});
+});
+
+test('氣球影跟隨旋轉中心、位置與大小，高處更淡且柔化', () => {
+  const view=sceneAPI.sceneLayout(1280,665),pose={x:view.x,y:view.ground-100,width:150,height:170,angle:0};
+  const shadow=groundAPI.balloonShadow(view,pose);
+  const moved=groundAPI.balloonShadow(view,{...pose,x:pose.x+45});assert.ok(moved.x>shadow.x);
+  const rotated=groundAPI.balloonShadow(view,{...pose,angle:.3});assert.ok(rotated.x>shadow.x);
+  const high=groundAPI.balloonShadow(view,{...pose,y:pose.y-100});
+  assert.ok(high.opacity<shadow.opacity && high.blur>shadow.blur);
+  const big=groundAPI.balloonShadow(view,{...pose,width:220});assert.ok(big.rx>shadow.rx);
+  assert.ok(shadow.x>pose.x && shadow.y<view.ground);
+});
+
+test('32片分散於道路，30/60/120fps落地微彈後停止且不穿地', () => {
+  const view=sceneAPI.sceneLayout(1280,665);
+  const run=fps=>Array.from({length:32},(_,i)=>{
+    const initial={x:view.x+(i-16)*3,y:view.ground-200-(i%5)*25,width:200,
+      vx:(i-16)*12,vy:-120+(i%7)*35,angle:i*.27,flip:0,tilt:0,
+      flipSpeed:3+i%3,tiltSpeed:1.3,spin:1.2,drag:.8+(i%4)*.2,phase:i*.7,age:0};
+    const piece=groundAPI.placeShard(view,initial,(i%5-2)*.02);
+    for(let frame=0;frame<fps*25;frame++) {
+      groundAPI.advanceGroundShard(piece,1/fps,view);
+      assert.ok(piece.height>=0);assert.ok(Object.values(piece).filter(v=>typeof v==='number').every(Number.isFinite));
+    }
+    assert.equal(piece.height,0);assert.equal(piece.landed,true);assert.equal(piece.settled,true);
+    assert.equal(piece.vh,0);assert.equal(piece.gvx,0);assert.equal(piece.gvz,0);
+    assert.ok(piece.gz>=view.nearDepth && piece.gz<=view.farDepth);
+    const before=JSON.stringify({...piece,age:0});groundAPI.advanceGroundShard(piece,1,view);
+    assert.equal(JSON.stringify({...piece,age:0}),before);
+    return piece;
+  });
+  const slow=run(30),normal=run(60),fast=run(120);
+  for(let i=0;i<32;i++) for(const result of [slow,normal]) {
+    assert.ok(Math.hypot(result[i].gx-fast[i].gx,result[i].gz-fast[i].gz)<.002);
+  }
+  assert.ok(new Set(fast.map(p=>p.gz.toFixed(2))).size>8);
+  assert.ok(new Set(fast.map(p=>groundAPI.projectGround(view,p.gx,p.gz).y.toFixed(0))).size>8);
+});
+
+test('爆後長時間仍保留所有落片，重置一次清除', async () => {
+  const page=harness();await settle();page.step();for(let i=0;i<12;i++) page.button.click();
+  for(let i=0;i<120&&!page.state.exploded;i++)page.step();
+  const frozenHeight=page.pieces[0].textureHeight;
+  for(let i=0;i<750;i++)page.step(50);
+  assert.equal(page.state.particles,32);assert.ok(page.pieces.every(piece=>piece.settled && piece.height===0));
+  assert.ok(page.pieces.every(piece=>piece.textureHeight>20));
+  assert.equal(page.drawnImageSizes.length,33);
+  assert.ok(page.drawnImageSizes.every(([w,h])=>w>0 && h>20),'落地高度歸零不能讓drawImage貼圖高度也歸零');
+  assert.equal(page.drawnImageSizes.filter(([,h])=>h===frozenHeight).length,32,'32片保留爆炸當下貼圖高度');
+  page.reset();assert.equal(page.state.particles,0);page.leave();
+});
+
+test('街景圖失敗會清楚提示並釋放GPU及相機，正常離頁也釋放素材', async () => {
+  const broken=harness({assetFailed:true});await settle();
+  assert.match(broken.errors[0],/街景素材載入失敗/);assert.equal(broken.state.stopped,true);
+  assert.equal(broken.counts.assets,1);assert.equal(broken.counts.balloon,1);assert.ok(broken.counts.tracks>=1);
+  const normal=harness();await settle();normal.leave();assert.equal(normal.counts.assets,1);
+});
+
+test('本地場景圖載入失敗、完成及途中釋放都不保留事件或來源', async () => {
+  for(const mode of ['ready','error','release']) {
+    const images=[],document={createElement(){const image={removeAttribute(name){delete this[name];}};images.push(image);return image;}};
+    const assets=sceneAPI.createStreetAssets(document),completion=assets.ready.catch(error=>error);
+    if(mode==='ready') {images.forEach(image=>image.onload());await completion;assert.equal(assets.street,images[0]);assert.equal(assets.hydrant,images[1]);}
+    if(mode==='error') {images[0].onerror();assert.ok(await completion instanceof Error);}
+    assets.release();assert.ok(await completion===undefined || mode!=='ready');
+    assert.equal(assets.street,null);assert.equal(assets.hydrant,null);
+    assert.ok(images.every(image=>image.onload===null && image.onerror===null && image.src===undefined));
+  }
+});
+
+test('街景等比覆蓋，栓腳綁點及路緣同源校準；落片平面始終在柏油側', () => {
+  for(const [width,height] of [[1280,665],[390,844],[844,390]]) {
+    const view=sceneAPI.sceneLayout(width,height),image=view.image;
+    assert.ok(image.x<=0 && image.y<=0);
+    assert.ok(image.x+1536*image.scale>=width-.001 && image.y+1024*image.scale>=height-.001);
+    assert.equal(view.x,image.x+768*image.scale);assert.equal(view.hydrantGround,image.y+525*image.scale);
+    assert.equal(view.anchor.x,view.x+(775-516)*view.hydrantScale);
+    assert.equal(view.anchor.y,view.hydrantGround+(635-1460)*view.hydrantScale);
+    const a=view.road[0],b=view.road[1];
+    for(const z of [view.nearDepth,0,view.farDepth]) for(const x of [-1,0,1]) {
+      const p=groundAPI.projectGround(view,x,z);
+      const curb=a.y+(p.x-a.x)*(b.y-a.y)/(b.x-a.x);
+      assert.ok(p.y>curb+10,`${width}×${height}: 地面位置不得跨過路緣`);
     }
   }
 });
