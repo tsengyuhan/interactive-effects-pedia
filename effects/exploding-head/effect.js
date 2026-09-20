@@ -1,10 +1,11 @@
-import { MAX_SCALE, resetState, pump, advance, estimateHead, splitMask, portraitBounds, fitPortrait, balloonPose, fractureBalloon, advanceShard, resetSwing, trackSwing, advanceSwing,neckColorFromPixels,ruptureProfile } from './physics.mjs';
+import { MAX_SCALE, resetState, pump, advance, estimateHead, fractureBalloon, advanceShard, resetSwing, trackSwing, advanceSwing } from './physics.mjs';
+import { sceneLayout,createTether,advanceTether,scenePose,drawStreet,drawHydrant,drawTether } from './scene.mjs';
 import { createBalloon } from './balloon.mjs';
 
 const shell = Shell.init({ id: 'exploding-head' });
 const canvas = document.createElement('canvas');
 canvas.className = 'exploding-stage';
-canvas.setAttribute('aria-label', t('即時充氣人像'));
+canvas.setAttribute('aria-label', t('消防栓上的臉部氣球'));
 shell.container.append(canvas);
 const ctx = canvas.getContext('2d');
 const video = document.createElement('video');
@@ -16,11 +17,8 @@ function surface() {
   const canvas = document.createElement('canvas');
   return { canvas, ctx: canvas.getContext('2d') };
 }
-const frame = surface(), body = surface(), headLayer = surface();
-const bodyMask = surface(), headMask = surface(), debris = surface();
-const neckSample=surface(), neckLayer=surface(), neckMask=surface();
-let neckReady=false,neckColor=null,rupture=null;
-let bodyPixels, headPixels;
+const frame=surface(),headLayer=surface(),headMask=surface(),debris=surface();
+let headPixels;
 let state = resetState();
 let background = '#dcebe3', speed = 1, maxScale=MAX_SCALE;
 let swing=resetSwing();
@@ -29,7 +27,7 @@ let stopped = false, ready = false, tracked = false, head = null;
 let raf = 0, lastTime = 0, lastVideoTime = -1, lastFrameAt = 0;
 let width = 1, height = 1, dpr = 1, cameraTimer = 0, startupTimer = 0;
 let particles = [], lastPose = null, statusKey = '';
-let composition = null, cameraWidth = 0, cameraHeight = 0;
+let scene=null,tether=null,hasTexture=false,cameraWidth=0,cameraHeight=0;
 let balloon;
 
 const controls = document.createElement('div');
@@ -62,10 +60,10 @@ function updateUI() {
   percent.textContent = `${Math.round(state.pressure * 100)}%`;
   const key = stopped ? '效果已停止，請重新整理。' : !ready ? '正在準備攝影機與本地模型…'
     : document.hidden ? '分頁暫停中'
-    : !tracked ? (state.exploded ? '追蹤遺失，已暫停顯示人像；請重新正對鏡頭。' : '請一個人正對鏡頭，讓頭髮與肩膀完整入鏡。')
-    : state.exploded ? '砰！移動看看無頭人像，按重置再玩一次。'
+    : !tracked ? (state.exploded ? '追蹤遺失，氣球已爆炸；按重置再玩一次。' : '請一個人正對鏡頭，讓五官完整入鏡。')
+    : state.exploded ? '砰！碎片飄落，繩子垂下；按重置再玩一次。'
     : state.pressure >= 1 ? '快爆炸了…'
-    : '連點打氣，讓整顆頭慢慢膨脹！';
+    : '連點打氣，讓消防栓上的臉部氣球慢慢膨脹！';
   if (key !== statusKey) { status.textContent = t(key); statusKey = key; }
 }
 
@@ -82,9 +80,9 @@ shell.addParam({ type:'range',key:'maxScale',label:'氣球最大尺寸（倍）'
 
 function resetEffect() {
   if (stopped) return;
-  state = resetState(); particles = []; lastPose = null; composition = null;
+  state = resetState(); particles = []; lastPose = null;
+  if(scene) tether=createTether(scene);
   swing=resetSwing();
-  neckColor=null; neckReady=false; rupture=null;
   debris.canvas.width = debris.canvas.height = 1;
   updateUI();
 }
@@ -129,6 +127,7 @@ function resize() {
   height = shell.container.clientHeight || window.innerHeight;
   dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
+  scene=sceneLayout(width,height); tether=createTether(scene);
   draw(performance.now());
 }
 
@@ -137,10 +136,10 @@ function infer(now) {
   const h = Math.round(video.videoHeight * w / video.videoWidth);
   if (w < 1 || h < 1) return;
   if (cameraWidth !== video.videoWidth || cameraHeight !== video.videoHeight) {
-    composition = null; swing=resetSwing();
+    swing=resetSwing();
     cameraWidth = video.videoWidth; cameraHeight = video.videoHeight;
   }
-  for (const layer of [frame, body, headLayer]) {
+  for (const layer of [frame, headLayer]) {
     if (layer.canvas.width !== w || layer.canvas.height !== h) {
       layer.canvas.width = w; layer.canvas.height = h;
     }
@@ -157,24 +156,17 @@ function infer(now) {
     head = detections.length === 1 ? estimateHead(detections[0].boundingBox, data, mask.width, mask.height, w, h) : null;
     tracked = Boolean(head);
     if(head) trackSwing(swing,head.cx,now,w); else swing=resetSwing();
-    // 固定預設構圖，調高氣球上限時只放大頭部，不連帶縮小人像。
-    if (head && !composition) composition = portraitBounds(w, h, head);
-    if (!bodyPixels || bodyPixels.width !== mask.width || bodyPixels.height !== mask.height) {
-      for (const layer of [bodyMask, headMask]) { layer.canvas.width = mask.width; layer.canvas.height = mask.height; }
-      bodyPixels = bodyMask.ctx.createImageData(mask.width, mask.height);
-      headPixels = headMask.ctx.createImageData(mask.width, mask.height);
+    if (!headPixels || headPixels.width !== mask.width || headPixels.height !== mask.height) {
+      headMask.canvas.width=mask.width; headMask.canvas.height=mask.height;
+      headPixels=headMask.ctx.createImageData(mask.width,mask.height);
     }
-    splitMask(data, mask.width, mask.height, w, h, head, bodyPixels.data, headPixels.data,rupture);
-    bodyMask.ctx.putImageData(bodyPixels, 0, 0); headMask.ctx.putImageData(headPixels, 0, 0);
-    for (const [layer, matte] of [[body, bodyMask], [headLayer, headMask]]) {
-      layer.ctx.globalCompositeOperation = 'source-over';
-      layer.ctx.clearRect(0, 0, w, h); layer.ctx.drawImage(frame.canvas, 0, 0);
-      layer.ctx.globalCompositeOperation = 'destination-in';
-      // 相同低解析遮罩分割兩部分，接縫不會留下原尺寸的頭。
-      layer.ctx.drawImage(matte.canvas, 0, 0, w, h);
-      layer.ctx.globalCompositeOperation = 'source-over';
-    }
-    if (head && !state.exploded) { balloon.update(headLayer.canvas, head); updateNeck(); }
+    // 只擷取臉部貼圖所需前景，不再輸出肩頸。
+    for(let i=0;i<data.length;i++) headPixels.data[i*4+3]=Math.round(Math.max(0,Math.min(1,(data[i]-.38)/.42))*255);
+    headMask.ctx.putImageData(headPixels,0,0);
+    headLayer.ctx.clearRect(0,0,w,h); headLayer.ctx.drawImage(frame.canvas,0,0);
+    headLayer.ctx.globalCompositeOperation='destination-in';headLayer.ctx.drawImage(headMask.canvas,0,0,w,h);
+    headLayer.ctx.globalCompositeOperation='source-over';
+    if(head && !state.exploded) { balloon.update(headLayer.canvas,head);hasTexture=true; }
     ready = true;
     lastFrameAt = now;
     clearTimeout(startupTimer);
@@ -183,79 +175,24 @@ function infer(now) {
   } finally { result?.close(); }
 }
 
-function layout() {
-  const fw = frame.canvas.width, fh = frame.canvas.height;
-  return fitPortrait(composition || portraitBounds(fw, fh, null), fw, width, height);
-}
+function layout() { return scene || sceneLayout(width,height); }
 
-function headPose(now, view) {
-  return balloonPose(head, state, now, view,swing);
-}
-
-function updateNeck() {
-  if(neckSample.canvas.width!==64) {
-    neckSample.canvas.width=neckSample.canvas.height=64;
-    neckLayer.canvas.width=neckMask.canvas.width=128;
-    neckLayer.canvas.height=neckMask.canvas.height=192;
-    const mask=neckMask.ctx.createImageData(128,192);
-    for(let y=0;y<192;y++) for(let x=0;x<128;x++) {
-      const t=y/191,spread=Math.min(1,t/.4);
-      // 氣口窄、接回原頸時漸擴，不能把整段脖子一併勒細。
-      const radius=27+33*spread*spread*(3-2*spread);
-      const side=Math.max(0,Math.min(1,(radius-Math.abs(x-63.5))/5));
-      const vertical=Math.min(1,y/8,(191-y)/24);
-      mask.data[(y*128+x)*4+3]=Math.round(255*side*side*(3-2*side)*vertical);
-    }
-    neckMask.ctx.putImageData(mask,0,0);
-  }
-  const length=head.bottom-head.top;
-  neckSample.ctx.clearRect(0,0,64,64);
-  // 優先取原下巴以下的脖子色；中位數不把鬍鬚、衣領或背景放大成貼片。
-  neckSample.ctx.drawImage(body.canvas,head.cx-head.chinWidth*.40,head.bottom+length*.012,head.chinWidth*.8,length*.065,0,0,64,64);
-  const current=neckColorFromPixels(neckSample.ctx.getImageData(0,0,64,64).data);
-  if(current) neckColor=current;
-  if(!neckColor) {
-    neckSample.ctx.clearRect(0,0,64,64);
-    neckSample.ctx.drawImage(headLayer.canvas,head.cx-head.chinWidth*.32,head.bottom-length*.20,head.chinWidth*.64,length*.07,0,0,64,64);
-    neckColor=neckColorFromPixels(neckSample.ctx.getImageData(0,0,64,64).data);
-  }
-  neckReady=Boolean(neckColor);
-  if(!neckReady) return;
-  neckLayer.ctx.globalCompositeOperation='source-over'; neckLayer.ctx.clearRect(0,0,128,192);
-  neckLayer.ctx.fillStyle=`rgb(${neckColor.join(',')})`; neckLayer.ctx.fillRect(0,0,128,192);
-  neckLayer.ctx.globalCompositeOperation='destination-in'; neckLayer.ctx.drawImage(neckMask.canvas,0,0);
-  neckLayer.ctx.globalCompositeOperation='source-over';
-}
-
-function neckBridge(pose) {
-  if(!neckReady) return;
-  const length=head.bottom-head.top;
-  const reach=Math.min(pose.height*.07,length*.11);
-  const topX=pose.x+Math.sin(pose.angle)*reach;
-  const topY=pose.y-Math.cos(pose.angle)*reach;
-  const lowerY=head.bottom+length*.15,span=lowerY-topY;
-  ctx.save();
-  ctx.transform(1,0,(pose.anchorX-topX)/span,1,topX,topY);
-  ctx.drawImage(neckLayer.canvas,-head.chinWidth*1.18,0,head.chinWidth*2.36,span);
-  ctx.restore();
-}
+function headPose() { return scenePose(scene,tether,state); }
 
 function draw(now) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = background; ctx.fillRect(0, 0, width, height);
-  if (ready && tracked && head && !stopped) {
-    const view = layout();
-    ctx.save();
-    ctx.translate(view.x + frame.canvas.width * view.scale, view.y);
-    ctx.scale(-view.scale, view.scale);
-    ctx.drawImage(body.canvas, 0, 0);
-    if (!state.exploded) {
-      lastPose = headPose(now, view);
-      neckBridge(lastPose);
-      ctx.translate(lastPose.x, lastPose.y); ctx.rotate(lastPose.angle);
-      ctx.drawImage(balloon.render(state.pressure,neckColor,head.chinWidth*1.5/lastPose.width), -lastPose.width/2, -lastPose.height, lastPose.width, lastPose.height);
+  if(scene && tether) {
+    drawStreet(ctx,scene);
+    const visible=hasTexture && !state.exploded && !stopped;
+    lastPose=visible?headPose():null;
+    drawTether(ctx,tether,scene,lastPose);
+    drawHydrant(ctx,scene);
+    if(lastPose) {
+      ctx.save();ctx.translate(lastPose.x,lastPose.y);ctx.rotate(lastPose.angle);
+      ctx.drawImage(balloon.render(state.pressure),-lastPose.width/2,-lastPose.height,lastPose.width,lastPose.height);
+      ctx.restore();
     }
-    ctx.restore();
   }
   for (const piece of particles) {
     ctx.save(); ctx.globalAlpha = Math.min(1, Math.max(0, (piece.life - piece.age) / 1.1));
@@ -274,16 +211,12 @@ function draw(now) {
 }
 
 function explode() {
-  rupture=ruptureProfile();
-  const pose = lastPose || headPose(performance.now(), layout());
-  // 凍結已著色球面；鏡像與主畫面一致，初始碎片可拼回氣球。
-  debris.canvas.width = debris.canvas.height = 512;
-  debris.ctx.save(); debris.ctx.translate(512,0); debris.ctx.scale(-1,1);
-  debris.ctx.drawImage(balloon.canvas,0,0); debris.ctx.restore();
-  const view=pose.view, w=pose.width*view.scale, h=pose.height*view.scale;
-  const angle=-pose.angle, cosine=Math.cos(angle), sine=Math.sin(angle);
-  const centerX=view.x+(frame.canvas.width-pose.x)*view.scale;
-  const centerY=view.y+pose.y*view.scale;
+  const pose=lastPose || headPose();
+  // 貼圖已鏡像，碎片沿用球體畫面座標。
+  debris.canvas.width=debris.canvas.height=512;
+  debris.ctx.drawImage(balloon.canvas,0,0);
+  const w=pose.width,h=pose.height,angle=pose.angle,cosine=Math.cos(angle),sine=Math.sin(angle);
+  const centerX=pose.x,centerY=pose.y;
   particles=fractureBalloon().map(cell => {
     const dx=cell.center.x*w/2, dy=(cell.center.y-1)*h/2;
     const mass=.8+Math.random()*.6;
@@ -291,7 +224,7 @@ function explode() {
       polygon:cell.polygon.map(p=>({x:(p.x-cell.center.x)*w/2,y:(p.y-cell.center.y)*h/2})),
       x:centerX+dx*cosine-dy*sine, y:centerY+dx*sine+dy*cosine,
       width:w,height:h,offsetX:(cell.center.x+1)*w/2,offsetY:(cell.center.y+1)*h/2,
-      vx:cell.center.x*(170+Math.random()*120),vy:cell.center.y*(120+Math.random()*90)-90,
+      vx:cell.center.x*(170+Math.random()*120)+tether.velocity.x,vy:cell.center.y*(120+Math.random()*90)-90+tether.velocity.y,
       angle,spin:(Math.random()-.5)*3.8,flip:0,tilt:0,
       flipSpeed:(Math.random()>.5?1:-1)*(2+Math.random()*4),tiltSpeed:(Math.random()-.5)*3,
       drag:(.7+Math.sqrt(cell.area)*1.3)/mass,phase:Math.random()*Math.PI*2,
@@ -312,6 +245,7 @@ function tick(now) {
     // 裝置暫停供幀時，不讓使用者對著過期的人像繼續打氣。
     if (ready && now - lastFrameAt > 750) { tracked = false; swing=resetSwing(); updateUI(); }
     if(tracked) advanceSwing(swing,dt);
+    if(scene && tether) advanceTether(tether,scene,dt,now,swing,state.exploded);
     for (const piece of particles) advanceShard(piece, dt);
     particles = particles.filter(piece => piece.age < piece.life);
     // 先計算上限附近的繪圖姿態，再用同一姿態切成碎片。
@@ -336,10 +270,9 @@ function release() {
   }
   segmenter = detector = null;
   if (audio) { try { void audio.close().catch(() => {}); } catch {} audio = null; }
-  particles = []; bodyPixels = headPixels = null;
-  rupture=null; neckColor=null; neckReady=false;
+  particles = []; headPixels = null; hasTexture=false;
   balloon?.release(); balloon = null;
-  for (const layer of [frame, body, headLayer, bodyMask, headMask, debris,neckSample,neckLayer,neckMask]) layer.canvas.width = layer.canvas.height = 1;
+  for (const layer of [frame, headLayer, headMask, debris]) layer.canvas.width = layer.canvas.height = 1;
   window.removeEventListener('resize', resize);
   document.removeEventListener('visibilitychange', visibility);
   updateUI(); draw(performance.now());

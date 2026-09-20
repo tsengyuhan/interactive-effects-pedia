@@ -4,6 +4,16 @@
   "use strict";
 
   const DICT = {
+    "消防栓上的臉部氣球": "A face balloon tied to a fire hydrant",
+    "追蹤遺失，氣球已爆炸；按重置再玩一次。": "Tracking lost; the balloon has popped. Press Reset to play again.",
+    "請一個人正對鏡頭，讓五官完整入鏡。": "Face the camera alone with all facial features in view.",
+    "砰！碎片飄落，繩子垂下；按重置再玩一次。": "Pop! The pieces flutter down and the string falls. Press Reset to play again.",
+    "連點打氣，讓消防栓上的臉部氣球慢慢膨脹！": "Tap Pump to inflate the face balloon tied to the fire hydrant!",
+    "把你的臉變成綁在路邊消防栓的立體氣球，打氣直到爆炸": "Turn your face into a 3D balloon tied to a roadside fire hydrant, then pump it until it pops",
+    "本地模型擷取即時五官，貼滿有曲面光影的不透明氣球；畫面只呈現路面、消防栓與氣球。": "Local models capture your live facial features and wrap them around an opaque, shaded balloon. The scene contains only a street, a hydrant and the balloon.",
+    "浮力、風力與移頭慣性牽動多段繩索；固定綁點與繩長約束讓氣球自然甩動，打氣時彈性膨脹。": "Buoyancy, wind and head movement drive a segmented string. A fixed anchor and length constraints create natural swinging, with springy inflation.",
+    "爆炸薄片受重力與朝向阻力飄落，失去浮力的繩子垂下；重置重新綁好，消防栓比例不變。": "Popped flakes flutter under gravity and orientation-dependent drag while the unlifted string falls. Reset restores the tethered balloon without resizing the hydrant.",
+
     "拉開過程用連續幀（布料皺褶真實），開口內部是 alpha 透明。牛仔褲 7 幀（第 1 幀起鈕扣鬆開，連腰口一起張開）、包包 9 幀，接進來前先逐幀對齊色彩，拖曳時才不會閃。程式在相鄰幀間交叉淡化，並沿拉鍊軸把較閉的那幀漸變補滿，開口的外緣一律收在拉鍊頭上；開口尖點與齒條位置都是逐幀量測後內插，拉鍊頭才會一直貼著齒條跟手移動": "The opening uses aligned frames with real fabric folds and transparent interiors: seven for jeans (the button loosens and the waistband opens from the first frame) and nine for the bag. Adjacent frames crossfade, progressively restoring the more closed frame along the zipper axis. The opening edge stays at the slider, while measured opening tips and tooth positions are interpolated so the slider follows the seam and your hand.",
     /* ── 爆炸頭 ─────────────────────────── */
     "爆炸頭": "Exploding Head",

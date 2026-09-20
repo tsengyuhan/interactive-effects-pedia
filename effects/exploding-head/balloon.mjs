@@ -20,14 +20,11 @@ export function createBalloon(document) {
       varying vec2 point;
       uniform sampler2D photo;
       uniform float pressure;
-      uniform vec3 neckColor;
-      uniform float neckReady;
-      uniform float neckRatio;
       void main() {
         vec2 p=point/0.985;
-        // 下端收成與原頸同寬的短氣口，上部仍保持飽滿球面。
+        // 下端收成短氣嘴，上部仍保持飽滿球面。
         float taper=1.-smoothstep(-.98,-.70,p.y);
-        p.x/=mix(1.,clamp(neckRatio/.34,.20,.8),taper);
+        p.x/=mix(1.,.38,taper);
         float radius=dot(p,p);
         if(radius>1.) { gl_FragColor=vec4(0.); return; }
         vec3 n=vec3(p,sqrt(max(0.,1.-radius)));
@@ -40,7 +37,6 @@ export function createBalloon(document) {
         float diffuse=max(0.,dot(n,light));
         float rim=pow(1.-n.z,2.);
         float gloss=pow(max(0.,dot(n,normalize(light+vec3(0.,0.,1.)))),34.);
-        color=mix(color,neckColor,(1.-smoothstep(-.98,-.77,p.y))*neckReady);
         // 不透明人臉包滿球面，以柔和方向光保留立體與原膚色。
         color*=.89+.18*diffuse-.035*rim;
         color+=vec3(1.,.99,.96)*gloss*(.14+.08*pressure);
@@ -69,26 +65,23 @@ export function createBalloon(document) {
   const input = document.createElement('canvas'); input.width = input.height = 256;
   const context = input.getContext('2d', { willReadFrequently: true });
   const pressureUniform = gl.getUniformLocation(program, 'pressure');
-  const neckColorUniform=gl.getUniformLocation(program,'neckColor');
-  const neckReadyUniform=gl.getUniformLocation(program,'neckReady');
-  const neckRatioUniform=gl.getUniformLocation(program,'neckRatio');
   return {
     canvas,
     update(headLayer, head) {
       context.clearRect(0, 0, 256, 256);
       const crop=head.face || head;
+      context.save();context.translate(256,0);context.scale(-1,1);
       context.drawImage(headLayer, crop.left, crop.top, crop.right-crop.left, crop.bottom-crop.top, 0, 0, 256, 256);
+      context.restore();
       const image = context.getImageData(0, 0, 256, 256);
       fillTexture(image.data, 256, 256);
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 256, gl.RGBA, gl.UNSIGNED_BYTE, image.data);
     },
-    render(pressure,neck=null,ratio=.13) {
+    render(pressure) {
       if (gl.isContextLost()) throw new Error('WebGL context lost');
       gl.viewport(0, 0, 512, 512); gl.useProgram(program);
       gl.uniform1f(pressureUniform, pressure);
-      gl.uniform3f(neckColorUniform,...(neck || [0,0,0]).map(value=>value/255));
-      gl.uniform1f(neckReadyUniform,neck?1:0); gl.uniform1f(neckRatioUniform,ratio);
       gl.drawArrays(gl.TRIANGLES,0,6);
       return canvas;
     },
