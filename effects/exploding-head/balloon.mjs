@@ -20,8 +20,14 @@ export function createBalloon(document) {
       varying vec2 point;
       uniform sampler2D photo;
       uniform float pressure;
+      uniform vec3 neckColor;
+      uniform float neckReady;
+      uniform float neckRatio;
       void main() {
         vec2 p=point/0.985;
+        // 下端收成與原頸同寬的短氣口，上部仍保持飽滿球面。
+        float taper=1.-smoothstep(-.98,-.70,p.y);
+        p.x/=mix(1.,clamp(neckRatio/.34,.20,.8),taper);
         float radius=dot(p,p);
         if(radius>1.) { gl_FragColor=vec4(0.); return; }
         vec3 n=vec3(p,sqrt(max(0.,1.-radius)));
@@ -29,19 +35,16 @@ export function createBalloon(document) {
         vec2 curved=vec2(atan(n.x,max(.001,n.z))/3.14159265,asin(n.y)/3.14159265);
         vec2 uv=mix(p*.5,curved,.64)+.5;
         uv.y=1.-uv.y;
-        vec4 sample=texture2D(photo,uv);
-        vec3 color=sample.rgb;
+        vec3 color=texture2D(photo,uv).rgb;
         vec3 light=normalize(vec3(-.48,.66,1.));
         float diffuse=max(0.,dot(n,light));
         float rim=pow(1.-n.z,2.);
         float gloss=pow(max(0.,dot(n,normalize(light+vec3(0.,0.,1.)))),34.);
-        // 臉保留原亮度，透明區只留下薄膜反光，不包覆灰黑球殼。
-        color*=.96+.09*diffuse;
+        color=mix(color,neckColor,(1.-smoothstep(-.98,-.77,p.y))*neckReady);
+        // 不透明人臉包滿球面，以柔和方向光保留立體與原膚色。
+        color*=.89+.18*diffuse-.035*rim;
         color+=vec3(1.,.99,.96)*gloss*(.14+.08*pressure);
-        float membrane=.035+rim*.18+gloss*.42;
-        float alpha=sample.a+membrane*(1.-sample.a);
-        color=(color*sample.a+vec3(.97,.99,1.)*membrane*(1.-sample.a))/max(alpha,.001);
-        alpha*=1.-smoothstep(.990,1.,sqrt(radius));
+        float alpha=1.-smoothstep(.990,1.,sqrt(radius));
         gl_FragColor=vec4(color,alpha);
       }`));
     gl.linkProgram(program);
@@ -66,20 +69,27 @@ export function createBalloon(document) {
   const input = document.createElement('canvas'); input.width = input.height = 256;
   const context = input.getContext('2d', { willReadFrequently: true });
   const pressureUniform = gl.getUniformLocation(program, 'pressure');
+  const neckColorUniform=gl.getUniformLocation(program,'neckColor');
+  const neckReadyUniform=gl.getUniformLocation(program,'neckReady');
+  const neckRatioUniform=gl.getUniformLocation(program,'neckRatio');
   return {
     canvas,
     update(headLayer, head) {
       context.clearRect(0, 0, 256, 256);
-      context.drawImage(headLayer, head.left, head.top, head.right-head.left, head.bottom-head.top, 0, 0, 256, 256);
+      const crop=head.face || head;
+      context.drawImage(headLayer, crop.left, crop.top, crop.right-crop.left, crop.bottom-crop.top, 0, 0, 256, 256);
       const image = context.getImageData(0, 0, 256, 256);
       fillTexture(image.data, 256, 256);
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 256, gl.RGBA, gl.UNSIGNED_BYTE, image.data);
     },
-    render(pressure) {
+    render(pressure,neck=null,ratio=.13) {
       if (gl.isContextLost()) throw new Error('WebGL context lost');
       gl.viewport(0, 0, 512, 512); gl.useProgram(program);
-      gl.uniform1f(pressureUniform, pressure); gl.drawArrays(gl.TRIANGLES, 0, 6);
+      gl.uniform1f(pressureUniform, pressure);
+      gl.uniform3f(neckColorUniform,...(neck || [0,0,0]).map(value=>value/255));
+      gl.uniform1f(neckReadyUniform,neck?1:0); gl.uniform1f(neckRatioUniform,ratio);
+      gl.drawArrays(gl.TRIANGLES,0,6);
       return canvas;
     },
     release() {
@@ -130,6 +140,6 @@ export function fillTexture(pixels, width, height) {
       for(let c=0;c<3;c++) pixels[index*4+c]=filled[index*4+c]*(1-blend)+sums[c]/(high-low+1)*blend;
     }
   }
-  // RGB延伸只為濾波防黑邊，膜的透明度仍由原本的人像遮罩決定。
-  for(let i=0;i<originalAlpha.length;i++) pixels[i*4+3]=originalAlpha[i];
+  // 先補有效前景RGB；實心球面模式不讓原遮罩孔洞透出合成背景。
+  for(let i=0;i<originalAlpha.length;i++) pixels[i*4+3]=255;
 }

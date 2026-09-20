@@ -87,7 +87,9 @@ export function estimateHead(box, mask, mw, mh, width, height) {
   }
   const bottom = Math.min(height, y + fh * 1.12);
   if (right <= left || bottom <= top) return null;
-  return { left, right, top, bottom, cx: (left + right) / 2, chinWidth: fw * 0.28 };
+  const face={left:Math.max(0,x-fw*.035),right:Math.min(width,x+fw*1.035),
+    top:Math.max(0,y-fh*.10),bottom:Math.min(height,y+fh*1.08)};
+  return { left, right, top, bottom, cx: (left + right) / 2, chinWidth: fw * 0.28,face };
 }
 
 export function insideHead(x, y, head) {
@@ -99,7 +101,27 @@ export function insideHead(x, y, head) {
   return Math.abs(x - head.cx) <= radius;
 }
 
-export function splitMask(data, mw, mh, width, height, head, bodyRGBA, headRGBA) {
+export function ruptureProfile(random=Math.random) {
+  const points=[{x:-1,y:0}];
+  let x=-1;
+  for(let i=0;i<7;i++) {
+    x+=.16+random()*.12;
+    points.push({x:Math.min(.9,x),y:(i%2?-.2:.35)+random()*.5});
+  }
+  points.push({x:1,y:0});
+  return points;
+}
+
+export function ruptureOffset(profile,x) {
+  if(!profile || x<=-1 || x>=1) return 0;
+  for(let i=1;i<profile.length;i++) if(x<=profile[i].x) {
+    const a=profile[i-1],b=profile[i];
+    return a.y+(b.y-a.y)*(x-a.x)/(b.x-a.x);
+  }
+  return 0;
+}
+
+export function splitMask(data, mw, mh, width, height, head, bodyRGBA, headRGBA, rupture=null) {
   for (let i = 0; i < data.length; i++) {
     const alpha = Math.round(clamp((data[i] - 0.38) / 0.42, 0, 1) * 255);
     const x=(i % mw + .5)/mw*width,y=(Math.floor(i/mw)+.5)/mh*height;
@@ -109,7 +131,9 @@ export function splitMask(data, mw, mh, width, height, head, bodyRGBA, headRGBA)
       const ratio=clamp((y-head.top)/length,0,1);
       const taper=clamp((ratio-.62)/.38,0,1);
       const radius=(head.right-head.left)/2*(1-taper)+head.chinWidth*taper;
-      const boundary=head.bottom-length*.055+length*.08*Math.min(1,(dx/head.chinWidth)**2);
+      // 破口只作用於保守頸寬，避免兩側凹凸延伸到衣領。
+      const tear=ruptureOffset(rupture,(x-head.cx)/(head.chinWidth*.8))*length*.095;
+      const boundary=head.bottom-length*.055+length*.08*Math.min(1,(dx/head.chinWidth)**2)+tear;
       const feather=Math.max(height/mh*1.15,length*.025);
       const edge=Math.min(radius-dx,boundary-y,y-head.top+feather);
       const amount=clamp((edge+feather*.5)/feather,0,1);
@@ -132,6 +156,17 @@ export function trackSwing(swing, x, now, frameWidth) {
     else { swing.angle=0; swing.velocity=0; }
   }
   swing.previousX=x; swing.previousTime=now;
+}
+
+export function neckColorFromPixels(pixels) {
+  const colors=[];
+  for(let i=0;i<pixels.length;i+=4) {
+    const r=pixels[i],g=pixels[i+1],b=pixels[i+2];
+    // 去除低可信前景、近黑鬍鬚及明顯冷色衣領，保留不同明暗的膚色。
+    if(pixels[i+3]>=200 && r+g+b>70 && r>=g*.82 && r>=b*.94) colors.push([r,g,b]);
+  }
+  if(colors.length<12) return null;
+  return [0,1,2].map(c=>colors.map(rgb=>rgb[c]).sort((a,b)=>a-b)[Math.floor(colors.length/2)]);
 }
 
 export function advanceSwing(swing, dt) {

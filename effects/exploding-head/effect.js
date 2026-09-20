@@ -1,5 +1,5 @@
-import { MAX_SCALE, resetState, pump, advance, estimateHead, splitMask, portraitBounds, fitPortrait, balloonPose, fractureBalloon, advanceShard, resetSwing, trackSwing, advanceSwing } from './physics.mjs';
-import { createBalloon, fillTexture } from './balloon.mjs';
+import { MAX_SCALE, resetState, pump, advance, estimateHead, splitMask, portraitBounds, fitPortrait, balloonPose, fractureBalloon, advanceShard, resetSwing, trackSwing, advanceSwing,neckColorFromPixels,ruptureProfile } from './physics.mjs';
+import { createBalloon } from './balloon.mjs';
 
 const shell = Shell.init({ id: 'exploding-head' });
 const canvas = document.createElement('canvas');
@@ -19,7 +19,7 @@ function surface() {
 const frame = surface(), body = surface(), headLayer = surface();
 const bodyMask = surface(), headMask = surface(), debris = surface();
 const neckSample=surface(), neckLayer=surface(), neckMask=surface();
-let neckReady=false;
+let neckReady=false,neckColor=null,rupture=null;
 let bodyPixels, headPixels;
 let state = resetState();
 let background = '#dcebe3', speed = 1, maxScale=MAX_SCALE;
@@ -85,6 +85,7 @@ function resetEffect() {
   if (stopped) return;
   state = resetState(); particles = []; lastPose = null; composition = null;
   swing=resetSwing();
+  neckColor=null; neckReady=false; rupture=null;
   debris.canvas.width = debris.canvas.height = 1;
   updateUI();
 }
@@ -163,7 +164,7 @@ function infer(now) {
       bodyPixels = bodyMask.ctx.createImageData(mask.width, mask.height);
       headPixels = headMask.ctx.createImageData(mask.width, mask.height);
     }
-    splitMask(data, mask.width, mask.height, w, h, head, bodyPixels.data, headPixels.data);
+    splitMask(data, mask.width, mask.height, w, h, head, bodyPixels.data, headPixels.data,rupture);
     bodyMask.ctx.putImageData(bodyPixels, 0, 0); headMask.ctx.putImageData(headPixels, 0, 0);
     for (const [layer, matte] of [[body, bodyMask], [headLayer, headMask]]) {
       layer.ctx.globalCompositeOperation = 'source-over';
@@ -198,7 +199,9 @@ function updateNeck() {
     neckLayer.canvas.height=neckMask.canvas.height=192;
     const mask=neckMask.ctx.createImageData(128,192);
     for(let y=0;y<192;y++) for(let x=0;x<128;x++) {
-      const t=y/191,radius=59-15*Math.sin(t*Math.PI);
+      const t=y/191,spread=Math.min(1,t/.4);
+      // 氣口窄、接回原頸時漸擴，不能把整段脖子一併勒細。
+      const radius=27+33*spread*spread*(3-2*spread);
       const side=Math.max(0,Math.min(1,(radius-Math.abs(x-63.5))/5));
       const vertical=Math.min(1,y/8,(191-y)/24);
       mask.data[(y*128+x)*4+3]=Math.round(255*side*side*(3-2*side)*vertical);
@@ -207,18 +210,19 @@ function updateNeck() {
   }
   const length=head.bottom-head.top;
   neckSample.ctx.clearRect(0,0,64,64);
-  // 只從分割可靠的下巴中央取樣，透明／背景不會被拉成脖子。
-  neckSample.ctx.drawImage(headLayer.canvas,head.cx-head.chinWidth*.45,head.bottom-length*.17,head.chinWidth*.9,length*.10,0,0,64,64);
-  const image=neckSample.ctx.getImageData(0,0,64,64);
-  let valid=0;
-  for(let i=3;i<image.data.length;i+=4) if(image.data[i]>=180) valid++;
-  neckReady=valid>64;
+  // 優先取原下巴以下的脖子色；中位數不把鬍鬚、衣領或背景放大成貼片。
+  neckSample.ctx.drawImage(body.canvas,head.cx-head.chinWidth*.40,head.bottom+length*.012,head.chinWidth*.8,length*.065,0,0,64,64);
+  const current=neckColorFromPixels(neckSample.ctx.getImageData(0,0,64,64).data);
+  if(current) neckColor=current;
+  if(!neckColor) {
+    neckSample.ctx.clearRect(0,0,64,64);
+    neckSample.ctx.drawImage(headLayer.canvas,head.cx-head.chinWidth*.32,head.bottom-length*.20,head.chinWidth*.64,length*.07,0,0,64,64);
+    neckColor=neckColorFromPixels(neckSample.ctx.getImageData(0,0,64,64).data);
+  }
+  neckReady=Boolean(neckColor);
   if(!neckReady) return;
-  fillTexture(image.data,64,64);
-  for(let i=3;i<image.data.length;i+=4) image.data[i]=255;
-  neckSample.ctx.putImageData(image,0,0);
   neckLayer.ctx.globalCompositeOperation='source-over'; neckLayer.ctx.clearRect(0,0,128,192);
-  neckLayer.ctx.drawImage(neckSample.canvas,0,0,128,192);
+  neckLayer.ctx.fillStyle=`rgb(${neckColor.join(',')})`; neckLayer.ctx.fillRect(0,0,128,192);
   neckLayer.ctx.globalCompositeOperation='destination-in'; neckLayer.ctx.drawImage(neckMask.canvas,0,0);
   neckLayer.ctx.globalCompositeOperation='source-over';
 }
@@ -226,12 +230,13 @@ function updateNeck() {
 function neckBridge(pose) {
   if(!neckReady) return;
   const length=head.bottom-head.top;
-  const topX=pose.x+Math.sin(pose.angle)*pose.height*.16;
-  const topY=pose.y-Math.cos(pose.angle)*pose.height*.16;
-  const lowerY=head.bottom+length*.12,span=lowerY-topY;
+  const reach=Math.min(pose.height*.07,length*.11);
+  const topX=pose.x+Math.sin(pose.angle)*reach;
+  const topY=pose.y-Math.cos(pose.angle)*reach;
+  const lowerY=head.bottom+length*.15,span=lowerY-topY;
   ctx.save();
   ctx.transform(1,0,(pose.anchorX-topX)/span,1,topX,topY);
-  ctx.drawImage(neckLayer.canvas,-head.chinWidth*1.52,0,head.chinWidth*3.04,span);
+  ctx.drawImage(neckLayer.canvas,-head.chinWidth*1.18,0,head.chinWidth*2.36,span);
   ctx.restore();
 }
 
@@ -248,7 +253,7 @@ function draw(now) {
       lastPose = headPose(now, view);
       neckBridge(lastPose);
       ctx.translate(lastPose.x, lastPose.y); ctx.rotate(lastPose.angle);
-      ctx.drawImage(balloon.render(state.pressure), -lastPose.width/2, -lastPose.height, lastPose.width, lastPose.height);
+      ctx.drawImage(balloon.render(state.pressure,neckColor,head.chinWidth*1.5/lastPose.width), -lastPose.width/2, -lastPose.height, lastPose.width, lastPose.height);
     }
     ctx.restore();
   }
@@ -269,6 +274,7 @@ function draw(now) {
 }
 
 function explode() {
+  rupture=ruptureProfile();
   const pose = lastPose || headPose(performance.now(), layout());
   // 凍結已著色球面；鏡像與主畫面一致，初始碎片可拼回氣球。
   debris.canvas.width = debris.canvas.height = 512;
@@ -331,6 +337,7 @@ function release() {
   segmenter = detector = null;
   if (audio) { try { void audio.close().catch(() => {}); } catch {} audio = null; }
   particles = []; bodyPixels = headPixels = null;
+  rupture=null; neckColor=null; neckReady=false;
   balloon?.release(); balloon = null;
   for (const layer of [frame, body, headLayer, bodyMask, headMask, debris,neckSample,neckLayer,neckMask]) layer.canvas.width = layer.canvas.height = 1;
   window.removeEventListener('resize', resize);

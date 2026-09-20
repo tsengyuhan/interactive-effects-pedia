@@ -29,7 +29,7 @@ window.EFFECTS = [
     tech: ["MediaPipe Image Segmenter", "MediaPipe Face Detector", "WebGL", "Canvas 2D", "Web Audio API", "getUserMedia"],
     principle: [
       "本地人像分割與臉部偵測讀取同一影格，以前景頂緣估計含頭髮的頭部區域，分離頭部與身體。",
-      "清楚頭像貼上透明反光球面，充氣與移頭驅動彈簧，羽化皮膚銜接脖子；爆炸後不規則薄片受重力與朝向阻力飄落。",
+      "放大五官貼滿實心球面，窄底端以原頸色羽化銜接；充氣與移頭驅動彈簧，爆炸成飄落薄片，留下固定不規則破口。",
       "爆炸後持續追蹤並移除頭部；失去追蹤時暫停顯示人像，找回後維持爆炸狀態。"
     ],
     requirements: ["攝影機", "建議 Chrome / Edge", "瀏覽器需支援 WebGL 與硬體加速", "需經 start.bat 或 HTTPS 開啟", "單人正面；頭部輪廓為估算，長髮、側臉與遮擋可能殘邊", "本地雙模型推論，手機或較舊裝置可能較慢；音效不需麥克風"],

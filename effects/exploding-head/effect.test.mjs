@@ -168,7 +168,7 @@ function harness(options = {}) {
     get button() { return elements.find(el => el.className === 'exploding-pump'); },
     get status() { return elements.find(el => el.className === 'exploding-status').textContent; },
     get drawCount() { return elements.find(el => el.className === 'exploding-stage').draws.length; },
-    get state() { return vm.runInContext('({ ...state, tracked, ready, stopped, maxScale, swing:{...swing}, particles: particles.length })', sandbox); },
+    get state() { return vm.runInContext('({ ...state, tracked, ready, stopped, maxScale, rupture:rupture?.map(p=>({...p})) || null, neckColor, swing:{...swing}, particles: particles.length })', sandbox); },
     get composition() { return vm.runInContext('composition && { ...composition }', sandbox); },
     get layout() { return vm.runInContext('layout()', sandbox); },
     cameraSize(width, height) { const video = elements.find(el => el.tag === 'video'); video.videoWidth = width; video.videoHeight = height; },
@@ -214,15 +214,19 @@ test('完整互動：載入禁用、同幀不重推論、爆炸後追蹤／失�
   assert.equal(page.button.disabled, true);
   for (let i = 0; i < 120 && !page.state.exploded; i++) page.step();
   assert.equal(page.state.exploded, true); assert.equal(page.state.particles, 32);
+  const tear=page.state.rupture; assert.ok(tear.length>=8);
   assert.equal(page.button.textContent,'重置'); assert.equal(page.button.disabled,false);
   page.faces(0); page.step();
+  assert.deepEqual(page.state.rupture,tear);
   assert.equal(page.state.tracked, false); assert.match(page.status, /追蹤遺失/);
   page.faces(1); page.step(); assert.equal(page.state.exploded, true);
+  assert.deepEqual(page.state.rupture,tear);
   for (let i = 0; i < 440; i++) page.step();
   assert.equal(page.drawCount, 1);
   page.faces(0); page.step(); assert.equal(page.drawCount, 0);
   page.faces(1); page.step(); assert.equal(page.drawCount, 1);
   page.reset(); assert.equal(page.state.pressure, 0); assert.equal(page.state.particles, 0);
+  assert.equal(page.state.rupture,null); assert.equal(page.state.neckColor,null);
   assert.equal(page.button.disabled, false);
   page.faces(2); page.step(); assert.equal(page.button.disabled, true);
   page.faces(1); page.step(); page.step(800, false); assert.equal(page.button.disabled, true);
@@ -368,7 +372,7 @@ test('透明貼圖只由有效前景延伸，不混入去背區的像素', () =>
   for(let i=0;i<25;i++) pixels.set([0,255,0,0],i*4);
   pixels.set([180,110,80,255],(2*5+2)*4);
   fillTexture(pixels,5,5);
-  for(let i=0;i<25;i++) assert.deepEqual([...pixels.slice(i*4,i*4+4)],[180,110,80,i===12?255:0]);
+  for(let i=0;i<25;i++) assert.deepEqual([...pixels.slice(i*4,i*4+4)],[180,110,80,255]);
   const striped=new Uint8ClampedArray(5*5*4);
   for(let y=0;y<5;y++) striped.set([y%2?0:240,90,60,255],(y*5+2)*4);
   fillTexture(striped,5,5);
@@ -468,4 +472,53 @@ test('全部尺寸與最大甩動保留球面輪廓，身體比例不受擺動�
       }
     }
   }
+});
+
+test('五官裁切保留臉框內特徵、限制影像範圍並排除多餘髮頂', () => {
+  const mask=new Float32Array(200*200).fill(1);
+  for(const box of [{originX:70,originY:65,width:60,height:70},{originX:2,originY:2,width:70,height:80}]) {
+    const head=physics.estimateHead(box,mask,200,200,200,200),face=head.face;
+    assert.ok(face.left>=0 && face.top>=0 && face.right<=200 && face.bottom<=200);
+    assert.ok(face.left<=box.originX && face.right>=box.originX+box.width);
+    assert.ok(face.top<=box.originY && face.bottom>=box.originY+box.height);
+    assert.ok(face.top>=head.top && face.right-face.left<head.right-head.left);
+  }
+});
+
+test('實心球貼圖以有效前景RGB補滿所有alpha，不把背景綠色帶回球面', () => {
+  const pixels=new Uint8ClampedArray(7*7*4);
+  for(let i=0;i<49;i++) pixels.set([0,255,0,0],i*4);
+  pixels.set([190,135,99,255],24*4);
+  fillTexture(pixels,7,7);
+  for(let i=0;i<49;i++) assert.deepEqual([...pixels.slice(i*4,i*4+4)],[190,135,99,255]);
+});
+
+test('頸色中位數排除背景、黑鬍鬚與深藍衣領，不覆寫成冷色', () => {
+  const pixels=[];
+  for(let i=0;i<25;i++) pixels.push(181+(i%3),125+(i%3),91+(i%3),255);
+  for(let i=0;i<40;i++) pixels.push(3,9,55,255,0,0,0,255,0,255,0,0);
+  assert.deepEqual(physics.neckColorFromPixels(new Uint8ClampedArray(pixels)),[182,126,92]);
+  assert.equal(physics.neckColorFromPixels(new Uint8ClampedArray([2,8,42,255,255,255,255,0])),null);
+});
+
+test('固定破口不平坦、每幀相同且只改頸部，肩膀衣領保留', () => {
+  let seed=7; const random=()=>((seed=Math.imul(seed,16807)>>>0)/4294967296);
+  const profile=physics.ruptureProfile(random),saved=JSON.stringify(profile);
+  assert.ok(Math.max(...profile.map(p=>p.y))-Math.min(...profile.map(p=>p.y))>.5);
+  assert.ok(new Set(profile.slice(1).map((p,i)=>(p.x-profile[i].x).toFixed(3))).size>3);
+  const size=200,data=new Float32Array(size*size).fill(1);
+  const head={left:50,right:150,top:20,bottom:110,cx:100,chinWidth:22};
+  const smooth=new Uint8ClampedArray(size*size*4),torn=new Uint8ClampedArray(size*size*4),again=new Uint8ClampedArray(size*size*4),hair=new Uint8ClampedArray(size*size*4);
+  physics.splitMask(data,size,size,size,size,head,smooth,hair);
+  physics.splitMask(data,size,size,size,size,head,torn,hair,profile);
+  physics.splitMask(data,size,size,size,size,head,again,hair,profile);
+  assert.deepEqual(torn,again); assert.equal(JSON.stringify(profile),saved);
+  let changed=0;
+  for(let y=0;y<size;y++) for(let x=0;x<size;x++) {
+    const i=(y*size+x)*4+3;
+    if(torn[i]!==smooth[i]) { changed++; assert.ok(Math.abs(x+.5-head.cx)<head.chinWidth*.8); assert.ok(y<125); }
+    if(Math.abs(x+.5-head.cx)>=head.chinWidth*.8) assert.equal(torn[i],smooth[i]);
+    if(y>=125) assert.equal(torn[i],255);
+  }
+  assert.ok(changed>20);
 });
