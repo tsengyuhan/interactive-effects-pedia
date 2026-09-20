@@ -21,6 +21,24 @@
 // }
 window.EFFECTS = [
   {
+    id: "spray-paint",
+    title: "來噴漆吧",
+    category: "網頁互動",
+    description: "把手機變成噴漆罐，轉向控制水泥牆上的霧粒塗鴉",
+    instructions: "電腦開啟牆面，手機掃描 QR；啟用方向感測並朝向中央確認對位，下拉噴頭持續噴漆，放開即停。",
+    tech: ["DeviceOrientation", "Canvas 2D", "Web Audio API", "MQTT / WSS", "AES-GCM"],
+    principle: [
+      "以手機相對旋轉方向控制畫筆，避開直立角度跳躍；不追蹤手機平移。",
+      "加密訊息經公開網路中繼傳送，心跳、配對與序號驗證避免失聯續噴。",
+      "程序水泥紋理上疊加連續柔邊霧粒，停留會累積濃度與滴流。"
+    ],
+    requirements: ["電腦與具方向感測器的手機，兩台皆需連網", "手機需 HTTPS 與方向感測權限，不需相機或麥克風", "手機建議 iOS Safari 或 Android Chrome", "免費使用，不需帳號或信用卡", "使用 HiveMQ 公開測試中繼，不保證可用性；請勿分享配對連結"],
+    offline: false,
+    offlineNote: "手機配對需要連網，使用 HiveMQ 公開測試 MQTT 中繼，不保證可用性。",
+    hasParams: false,
+    why: "想研究手機和電腦網頁的互動方式"
+  },
+  {
     id: "exploding-head",
     title: "爆炸頭",
     category: "身體動作",
