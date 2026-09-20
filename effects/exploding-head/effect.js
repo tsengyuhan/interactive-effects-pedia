@@ -78,7 +78,6 @@ shell.addParam({ type:'range',key:'maxScale',label:'氣球最大尺寸（倍）'
     maxScale=Number(value);
     const target=1+state.pressure*(maxScale-1);
     if(state.scale>target) { state.scale=target; state.velocity=Math.min(0,state.velocity); }
-    composition=head?portraitBounds(frame.canvas.width,frame.canvas.height,head,maxScale):null;
   } });
 
 function resetEffect() {
@@ -158,7 +157,8 @@ function infer(now) {
     head = detections.length === 1 ? estimateHead(detections[0].boundingBox, data, mask.width, mask.height, w, h) : null;
     tracked = Boolean(head);
     if(head) trackSwing(swing,head.cx,now,w); else swing=resetSwing();
-    if (head && !composition) composition = portraitBounds(w, h, head,maxScale);
+    // 固定預設構圖，調高氣球上限時只放大頭部，不連帶縮小人像。
+    if (head && !composition) composition = portraitBounds(w, h, head);
     if (!bodyPixels || bodyPixels.width !== mask.width || bodyPixels.height !== mask.height) {
       for (const layer of [bodyMask, headMask]) { layer.canvas.width = mask.width; layer.canvas.height = mask.height; }
       bodyPixels = bodyMask.ctx.createImageData(mask.width, mask.height);

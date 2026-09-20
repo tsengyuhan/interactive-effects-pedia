@@ -171,6 +171,7 @@ function harness(options = {}) {
     get state() { return vm.runInContext('({ ...state, tracked, ready, stopped, maxScale, rupture:rupture?.map(p=>({...p})) || null, neckColor, swing:{...swing}, particles: particles.length })', sandbox); },
     get composition() { return vm.runInContext('composition && { ...composition }', sandbox); },
     get layout() { return vm.runInContext('layout()', sandbox); },
+    get balloonWidth() { return vm.runInContext('lastPose && lastPose.width * lastPose.view.scale', sandbox); },
     cameraSize(width, height) { const video = elements.find(el => el.tag === 'video'); video.videoWidth = width; video.videoHeight = height; },
     step(ms = 16, fresh = true) {
       now += ms;
@@ -400,7 +401,7 @@ test('GPU配置失敗會清理已建立資源', () => {
   assert.deepEqual(deleted,['shader','program','context']);
 });
 
-test('最大倍數改變爆炸門檻、保持氣量，充氣過程身體構圖固定', async () => {
+test('最大倍數只放大氣球並改變爆炸門檻，調參、失追與重置皆保持人像構圖', async () => {
   for(const max of [1.5,2.35,4]) {
     const state=physics.resetState();
     for(let i=0;i<12;i++) physics.pump(state,1);
@@ -409,15 +410,29 @@ test('最大倍數改變爆炸門檻、保持氣量，充氣過程身體構圖�
     assert.ok(Math.abs(state.scale-max)<.12);
   }
   const page=harness(); await settle(); page.step();
+  const composition=page.composition,view=page.layout;
   for(let i=0;i<6;i++) page.button.click();
   const pressure=page.state.pressure;
-  page.param('maxScale',4); assert.equal(page.state.pressure,pressure);
-  const large=page.composition;
-  for(let i=0;i<60;i++) page.step();
-  assert.deepEqual(page.composition,large);
-  page.param('maxScale',1.5); assert.equal(page.state.pressure,pressure);
-  assert.notDeepEqual(page.composition,large); assert.ok(page.state.scale<=1.25);
-  page.reset(); assert.equal(page.state.maxScale,1.5); page.leave();
+  const widths=[];
+  for(const max of [1.5,4,1.5]) {
+    page.param('maxScale',max);
+    assert.equal(page.state.pressure,pressure);
+    assert.deepEqual(page.composition,composition); assert.deepEqual(page.layout,view);
+    for(let i=0;i<90;i++) page.step();
+    assert.deepEqual(page.composition,composition); assert.deepEqual(page.layout,view);
+    widths.push(page.balloonWidth);
+    page.faces(0); page.step(); page.faces(1); page.step();
+    assert.deepEqual(page.composition,composition); assert.deepEqual(page.layout,view);
+  }
+  assert.ok(widths[1]>widths[0]*1.5 && widths[1]>widths[2]*1.5);
+  assert.ok(Math.abs(page.state.scale-1.25)<.001);
+  for(const max of [4,1.5]) {
+    page.param('maxScale',max); page.reset();
+    assert.equal(page.state.maxScale,max); assert.equal(page.state.pressure,0);
+    assert.equal(page.composition,null); page.step();
+    assert.deepEqual(page.composition,composition); assert.deepEqual(page.layout,view);
+  }
+  page.leave();
 });
 
 test('底部唯一按鈕爆炸後立即可重置，即使沒有臉也能回到打氣', async () => {
