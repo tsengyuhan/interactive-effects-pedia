@@ -119,7 +119,8 @@ export function drawRoom(ctx,view,primary) {
 }
 
 export function drawRoomShadow(ctx,view,outline,strength=1) {
-  const shadows=projectShadow(view,outline);if(!shadows.length)return;
+  const outlines=Array.isArray(outline[0])?outline:[outline];
+  const shadows=outlines.flatMap(polygon=>projectShadow(view,polygon));if(!shadows.length)return;
   const distance=shadows.reduce((sum,s)=>sum+s.distance/shadows.length,0);
   ctx.save();ctx.beginPath();
   for(const surface of roomSurfaces(view))trace(ctx,surface.points.map(p=>projectPoint(view,p.x,p.z,p.height)));

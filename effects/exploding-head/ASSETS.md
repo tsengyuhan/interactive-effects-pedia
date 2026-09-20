@@ -1,13 +1,22 @@
 # 素材來源與目前用途
 
-以下來源素材在先前街景版本使用內建 image_gen 工具生成及編輯；v10 沒有生成或改動 `street.png` 與 `hydrant.png`，執行時不連外網。`thumb.png` 已更新為本版瀏覽器截圖，並非新生成素材。
+素材使用內建 image_gen 工具生成及編輯，執行時不連外網。v12 新增酒瓶，舊街景與消防栓保留但停用。`thumb.png` 為本版瀏覽器截圖，並非新生成素材。
 
 - `street.png`：1536×1024 舊街道底圖，保留檔案但 v10 不再載入或顯示。
-- `hydrant.png`：1024×1536 透明消防栓，v10 完整沿用同一檔案與原生 alpha；SHA256 `1886ac015fef72db80401c683db467bbcbc0a801602f62596c4c60d6bc0666c1`。
+- `hydrant.png`：1024×1536 舊透明消防栓，v12 不再載入或顯示；保留原檔。
+- `bottle.png`：1024×1536 透明玻璃酒瓶與琥珀色酒液，保留生成圖片原生 alpha；外部透明、空瓶頸部分透光、液面清楚可見。瓶身有效範圍約 (251,51)–(767,1360)，繩環綁在 y320 的瓶頸。
 - 兩面牆與地板由 `room.mjs` 的有限平面、主色配色與 Canvas 光影即時繪製，不使用背景圖片。
 - 臉球仍使用原 `balloon.mjs` shader，沒有跟隨場景主色染色；v10 開始時 SHA256 `70a506e66d2bf097888ce330cc1d98be196f1aeafebfb3cc0be9a086f0f32363`，本版未更改。
 
 ## 最終生成與編輯提示詞
+
+### 酒瓶生成（v12，內建工具）
+
+Use case: product-mockup. Asset type: photorealistic transparent PNG sprite for an interactive web scene. Primary request: a single unbranded clear glass liquor bottle standing upright, with visible rich amber whiskey filling about 65 percent of the bottle body. The empty upper section is clear glass; a readable horizontal curved liquid meniscus, thickness at the base, refraction, realistic reflections and warm luminous amber liquid make its contents unmistakable. Modest broad cylindrical bottle body, rounded shoulders, a clearly defined slender neck, small dark cork stopper. No label or printed text. Camera: frontal with a slight downward viewing angle, so the top ellipse and base volume are visible; no exaggerated perspective. Lighting: soft directional illumination from upper left/front with a controlled rim and realistic glass highlights, matching a pastel room. Composition: portrait 1024x1536 canvas; centered full bottle from cork to thick base with generous transparent margin, bottle occupies roughly x=290..734 and y=90..1450; neck around x=455..569, y=330. Keep edges clean. Background: true transparent alpha outside the bottle, and appropriately semitransparent glass in empty areas. No floor, no cast shadow, no backdrop, no fake checkerboard, no gray or white rectangular background, no balloon, no string, no hands, no other objects, no brand, no watermark. This will be composited over colored walls and a floor; retain realistic amber liquid while allowing the background through the clear glass.
+
+### 酒瓶去背編輯（v12，最終採用）
+
+Use case: background-extraction. Edit target: the supplied photograph of the amber liquor bottle. Isolate EXACTLY this same single glass bottle, preserving its cork, full silhouette, shoulders, neck, beautiful amber liquid level, highlights, thickness and camera angle. REMOVE the entire black/brown gradient backdrop and glow, not just recolor it. Output a TRUE TRANSPARENT PNG with alpha=0 everywhere outside the glass bottle. Absolutely no black, white, colored, gray or checkerboard-painted background; no shadow or glow outside silhouette. The bottle must have a clean alpha cutout. Keep original 1024x1536 canvas and bottle position. If possible use partial alpha in the empty clear glass areas, preserving glass rim highlights and realistic amber contents. Do not draw string or any additional objects. This is an extraction task, do not redesign or relight the bottle.
 
 ### 街景生成
 

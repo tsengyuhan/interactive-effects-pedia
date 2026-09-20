@@ -1,6 +1,8 @@
 import { clamp } from './physics.mjs';
 import { projectPoint,roomSurfaces,roomHalfWidth,drawRoom,drawRoomShadow } from './room.mjs';
 
+export const BOTTLE={width:1024,height:1536,centerX:509,top:51,bottom:1360,neckY:320,neckRadius:80};
+
 export function createSceneAssets(document) {
   let released=false;
   const pending=[],images=[],timers=[];
@@ -11,26 +13,29 @@ export function createSceneAssets(document) {
     image.onerror=()=>{clearTimeout(timer);reject(new Error(`Scene image unavailable: ${path}`));};
     image.src=path;
   });
-  const assets={hydrant:null,ready:null,release(){
+  const assets={bottle:null,ready:null,release(){
     if(released)return;released=true;timers.forEach(clearTimeout);
     images.forEach(image=>{image.onload=image.onerror=null;image.removeAttribute('src');});
     pending.forEach(reject=>reject(new Error('Scene images released')));
-    assets.hydrant=null;
+    assets.bottle=null;
   }};
-  assets.ready=load('./hydrant.png').then(hydrant=>{if(!released)assets.hydrant=hydrant;});
+  assets.ready=load('./bottle.png').then(bottle=>{if(!released)assets.bottle=bottle;});
   return assets;
 }
 
-// 構圖只依視窗，鏡頭距離、氣量與最大尺寸都不改變消防栓大小。
+// 構圖只依視窗，鏡頭距離、氣量與最大尺寸都不改變酒瓶大小。
 export function sceneLayout(width,height) {
   const span=Math.max(100,height-(height<500?150:178)-74),baseUnit=Math.min(span,width*1.18),unit=baseUnit*1.15;
-  // 共用鏡頭尺度與地板位移，讓球、栓、繩及投影一起拉近而不脫節。
+  // 共用鏡頭尺度與地板位移，讓球、瓶、繩及投影一起拉近而不脫節。
   const x=width/2,ground=height-(height<500?180:145)-(height<500?0:baseUnit*.25)+baseUnit*.15;
-  const hydrantHeight=unit*.44,hydrantScale=hydrantHeight/1464;
-  const view={width,height,x,ground,hydrantGround:ground,tetherGround:ground,unit,
+  const bottleHeight=unit*.44,bottleScale=bottleHeight/(BOTTLE.bottom-BOTTLE.top);
+  // 瓶頸比原綁點高，縮短基準繩長以保持原本球底高度。
+  const neckHeight=(BOTTLE.bottom-BOTTLE.neckY)*bottleScale;
+  const baseRopeLength=unit*(.44*825/1464+.22)-neckHeight;
+  const view={width,height,x,ground,bottleGround:ground,tetherGround:ground,unit,
     perspective:.5,depthScale:.52,roadSlope:0,roomHalf:roomHalfWidth(0),
-    nearDepth:-.65,farDepth:.3,hydrantHeight,hydrantScale,baseSize:unit*.195,
-    anchor:{x:x+(775-516)*hydrantScale,y:ground+(635-1460)*hydrantScale},baseRopeLength:unit*.22,ropeLength:unit*.22};
+    nearDepth:-.65,farDepth:.3,bottleHeight,bottleScale,baseSize:unit*.195,
+    anchor:{x,y:ground-neckHeight},baseRopeLength,ropeLength:baseRopeLength};
   view.road=roomSurfaces(view)[0].points.map(p=>projectPoint(view,p.x,p.z,p.height));
   return view;
 }
@@ -99,20 +104,25 @@ export function scenePose(view,tether,state) {
 
 export function drawRoomScene(ctx,view,assets,primary) {
   drawRoom(ctx,view,primary);
-  if(!assets?.hydrant)return;
-  const outline=Array.from({length:32},(_,i)=>{
-    const a=i*Math.PI/16;
-    return {x:Math.cos(a)*.105,z:0,height:.22+Math.sin(a)*.22};
-  });
-  drawRoomShadow(ctx,view,outline,.75);
+  if(!assets?.bottle)return;
+  // 身體肩部與細瓶頸各為凸輪廓，合併投影後才柔化，避免重疊處加深。
+  const scale=view.bottleScale/view.unit;
+  const outline=[
+    [[254,1360],[766,1360],[766,575],[590,430],[426,430],[254,575]],
+    [[420,430],[600,430],[600,51],[420,51]]
+  ].map(polygon=>polygon.map(([x,y])=>({x:(x-BOTTLE.centerX)*scale,z:0,height:(BOTTLE.bottom-y)*scale})));
+  drawRoomShadow(ctx,view,outline,.65);
 }
 
-export function drawHydrant(ctx,view,assets) {
-  if(!assets?.hydrant)return;
-  const s=view.hydrantScale;
-  ctx.drawImage(assets.hydrant,view.x-516*s,view.hydrantGround-1460*s,1024*s,1536*s);
-  ctx.save();ctx.strokeStyle='#b8a88b';ctx.lineWidth=Math.max(.7,view.baseSize*.011);
-  ctx.beginPath();ctx.ellipse(view.anchor.x-2*s,view.anchor.y+37*s,12*s,48*s,-.15,-1.7,1.7);ctx.stroke();ctx.restore();
+export function drawBottle(ctx,view,assets) {
+  if(!assets?.bottle)return;
+  const s=view.bottleScale,r=BOTTLE.neckRadius*s,y=view.anchor.y;
+  ctx.save();ctx.strokeStyle='#87755a';ctx.lineWidth=Math.max(1,view.baseSize*.014);
+  ctx.beginPath();ctx.ellipse(view.anchor.x,y,r,r*.27,0,Math.PI,Math.PI*2);ctx.stroke();
+  ctx.drawImage(assets.bottle,view.x-BOTTLE.centerX*s,view.bottleGround-BOTTLE.bottom*s,BOTTLE.width*s,BOTTLE.height*s);
+  ctx.strokeStyle='#b4a183';ctx.beginPath();ctx.ellipse(view.anchor.x,y,r,r*.27,0,0,Math.PI);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(view.anchor.x,y);ctx.lineTo(view.anchor.x-r*.22,y+r*.30);ctx.lineTo(view.anchor.x+r*.20,y+r*.28);ctx.closePath();ctx.stroke();
+  ctx.beginPath();ctx.moveTo(view.anchor.x+r*.15,y+r*.25);ctx.lineTo(view.anchor.x+r*.32,y+r*.70);ctx.stroke();ctx.restore();
 }
 
 export function drawTether(ctx,tether,view,pose) {

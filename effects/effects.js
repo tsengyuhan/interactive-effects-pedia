@@ -42,11 +42,11 @@ window.EFFECTS = [
     id: "exploding-head",
     title: "爆炸頭",
     category: "身體動作",
-    description: "把你的臉變成牆角消防栓上的立體氣球，打氣直到爆炸",
+    description: "把你的臉變成繫在酒瓶上的立體氣球，打氣直到爆炸",
     instructions: "左右移頭或歪頭帶動氣球；連點打氣，碎片全部落地後才能重置。設定可調主色調、自動配色牆面、繩長、充氣速度、最大尺寸與魚眼程度。",
     tech: ["MediaPipe Image Segmenter", "MediaPipe Face Detector", "WebGL", "Canvas 2D", "Web Audio API", "getUserMedia"],
     principle: [
-      "本地模型擷取即時五官，貼滿不透明立體氣球；兩面牆與地板自動配色，保留寫實消防栓。",
+      "本地模型擷取即時五官，貼滿不透明立體氣球；兩面牆與地板自動配色，氣球繫在裝有酒液的玻璃瓶頸。",
       "氣球從綁點垂直上浮，左右移頭與眼睛連線傾角帶動甩動；繩長約束、阻尼與微風讓球自然回穩。",
       "同一點光源將球影投向有限牆面與地板，接縫連續；碎片全部落地後，重置以陣風吹走再生成新球。"
     ],

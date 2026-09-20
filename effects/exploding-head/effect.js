@@ -1,12 +1,12 @@
 import { MAX_SCALE, resetState, pump, advance, estimateHead, fractureBalloon, resetSwing, trackSwing, trackRoll, advanceSwing } from './physics.mjs';
-import { createSceneAssets,sceneLayout,createTether,setRopeLength,advanceTether,scenePose,drawRoomScene,drawHydrant,drawTether } from './scene.mjs';
+import { createSceneAssets,sceneLayout,createTether,setRopeLength,advanceTether,scenePose,drawRoomScene,drawBottle,drawTether } from './scene.mjs';
 import { placeShard,advanceGroundShard,advanceWindShard,shardPose,clipRoad,drawBalloonShadow,drawShardShadow } from './ground.mjs';
 import { createBalloon } from './balloon.mjs';
 
 const shell = Shell.init({ id: 'exploding-head' });
 const canvas = document.createElement('canvas');
 canvas.className = 'exploding-stage';
-canvas.setAttribute('aria-label', t('消防栓上的臉部氣球'));
+canvas.setAttribute('aria-label', t('酒瓶上的臉部氣球'));
 shell.container.append(canvas);
 const ctx = canvas.getContext('2d');
 const video = document.createElement('video');
@@ -72,7 +72,7 @@ function updateUI() {
     : !tracked ? (state.exploded ? '追蹤遺失，氣球已爆炸；按重置再玩一次。' : '請一個人正對鏡頭，讓五官完整入鏡。')
     : state.exploded ? '砰！碎片飄落，繩子垂下；按重置再玩一次。'
     : state.pressure >= 1 ? '快爆炸了…'
-    : '連點打氣，讓消防栓上的臉部氣球慢慢膨脹！';
+    : '連點打氣，讓酒瓶上的臉部氣球慢慢膨脹！';
   if (key !== statusKey) { status.textContent = t(key); statusKey = key; }
 }
 
@@ -244,7 +244,7 @@ function draw(now) {
   for(const piece of particles) drawShardShadow(ctx,scene,piece);
   const ordered=[...particles].sort((a,b)=>b.gz-a.gz);
   for(const piece of ordered) if(piece.gz>=0) drawPiece(piece);
-  drawHydrant(ctx,scene,sceneAssets);
+  drawBottle(ctx,scene,sceneAssets);
   drawTether(ctx,tether,scene,lastPose);
   if(lastPose) {
     ctx.save();ctx.translate(lastPose.x,lastPose.y);ctx.rotate(lastPose.angle);
@@ -375,7 +375,7 @@ async function start() {
   try { balloon = createBalloon(document); }
   catch (error) { fail(error, '無法建立 3D 氣球，請啟用瀏覽器硬體加速，並使用 Chrome／Edge 重新整理。'); return; }
   sceneAssets=createSceneAssets(document);
-  const assetsReady=sceneAssets.ready.catch(error=>fail(error,'消防栓素材載入失敗，請確認圖片完整後重新整理。'));
+  const assetsReady=sceneAssets.ready.catch(error=>fail(error,'酒瓶素材載入失敗，請確認圖片完整後重新整理。'));
   try { await camera(); }
   catch (error) {
     fail(error, '無法開啟攝影機，請允許攝影機權限、關閉占用相機的程式，再經 start.bat 或 HTTPS 開啟並重新整理。');
