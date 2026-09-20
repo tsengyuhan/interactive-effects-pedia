@@ -149,7 +149,7 @@ export function resetSwing() { return { angle:0,velocity:0,previousX:null,previo
 
 export function trackSwing(swing, x, now, frameWidth) {
   const dt=(now-swing.previousTime)/1000;
-  if(swing.previousX!==null && dt>0 && dt<.2) {
+  if(swing.previousX!==null && dt>0 && dt<.75) {
     const displacement=(x-swing.previousX)/frameWidth;
     // 真正的追蹤位移施加角衝量；瞬間重定位不當成甩頭。
     if(Math.abs(displacement)<.18) swing.velocity-=displacement*12;

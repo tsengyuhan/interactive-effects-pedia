@@ -25,26 +25,27 @@ export function createStreetAssets(document) {
 // 構圖只依視窗，鏡頭距離、氣量與最大尺寸都不改變消防栓大小。
 export function sceneLayout(width,height) {
   const span=Math.max(100,height-(height<500?150:178)-74),unit=Math.min(span,width*1.18);
-  const imageScale=Math.max(width/1536,height/1024);
-  const imageX=(width-1536*imageScale)/2;
-  const imageY=clamp(height-(height<500?140:175)-720*imageScale,height-1024*imageScale,0);
-  const x=imageX+768*imageScale,hydrantGround=imageY+525*imageScale;
-  const ground=imageY+675*imageScale,hydrantHeight=unit*.28,hydrantScale=hydrantHeight/1464;
+  const imageScale=Math.max(width/1536,height/1024)*1.6;
+  const imageX=(width-1536*imageScale)/2-unit*.15;
+  const imageY=clamp(height-(height<500?120:160)-650*imageScale,height-1024*imageScale,0);
+  // 拉近同一街景，栓腳移到路緣內側，讓柏油前景仍容得下落片。
+  const x=imageX+768*imageScale,hydrantGround=imageY+552*imageScale;
+  const ground=imageY+650*imageScale,hydrantHeight=unit*.44,hydrantScale=hydrantHeight/1464;
   return {width,height,x,ground,hydrantGround,tetherGround:hydrantGround,unit,
     image:{x:imageX,y:imageY,scale:imageScale},perspective:.5,depthScale:.32,roadSlope:269/1536,
     nearDepth:-.14,farDepth:.16,
     road:[{x:imageX,y:imageY+486*imageScale},{x:imageX+1536*imageScale,y:imageY+755*imageScale},
-      {x:width,y:height},{x:0,y:height}],hydrantHeight,hydrantScale,baseSize:unit*.13,
-    anchor:{x:x+(775-516)*hydrantScale,y:hydrantGround+(635-1460)*hydrantScale},ropeLength:unit*.16};
+      {x:width,y:height},{x:0,y:height}],hydrantHeight,hydrantScale,baseSize:unit*.195,
+    anchor:{x:x+(775-516)*hydrantScale,y:hydrantGround+(635-1460)*hydrantScale},ropeLength:unit*.22};
 }
 
 export function createTether(view) {
   const points=Array.from({length:13},(_,i)=>{
-    const t=i/12,x=view.anchor.x-view.ropeLength*.18*t+Math.sin(t*Math.PI)*view.ropeLength*.035;
-    const y=view.anchor.y-view.ropeLength*.97*t;
+    const t=i/12,x=view.anchor.x+view.ropeLength*.80*t;
+    const y=view.anchor.y-view.ropeLength*.60*t;
     return {x,y,px:x,py:y};
   });
-  return {points,angle:-.12,velocity:{x:0,y:0}};
+  return {points,angle:.58,velocity:{x:0,y:0}};
 }
 
 export function advanceTether(tether, view, dt, time, swing, exploded) {
@@ -58,11 +59,12 @@ export function advanceTether(tether, view, dt, time, swing, exploded) {
       const p=points[i],vx=(p.x-p.px)*Math.exp(-1.65*step),vy=(p.y-p.py)*Math.exp(-1.65*step);
       p.px=p.x; p.py=p.y;
       const pull=i===last&&!exploded;
-      p.x+=vx+(wind*(pull?2:1)+(!exploded?swing.angle*920:0))*unit*step*step;
+      // 固定側風讓球從右側管往外飄，露出繩段；移頭慣性疊加其上。
+      p.x+=vx+(wind*(pull?2:1)+(pull?1000:0)+(!exploded?swing.angle*5500:0))*unit*step*step;
       p.y+=vy+(pull?-750:210)*unit*step*step;
     }
     // 多段繩長約束傳遞張力；爆炸只移除浮力，繩仍留在原綁點。
-    for(let iteration=0;iteration<24;iteration++) {
+    for(let iteration=0;iteration<32;iteration++) {
       points[0].x=view.anchor.x; points[0].y=view.anchor.y;
       for(let i=0;i<last;i++) {
         const a=points[i],b=points[i+1],dx=b.x-a.x,dy=b.y-a.y,length=Math.hypot(dx,dy)||1;
@@ -75,7 +77,7 @@ export function advanceTether(tether, view, dt, time, swing, exploded) {
     }
     points[0].x=points[0].px=view.anchor.x; points[0].y=points[0].py=view.anchor.y;
     const end=points[last],before=points[last-1];
-    const target=clamp(Math.atan2(end.x-before.x,before.y-end.y),-.58,.58);
+    const target=clamp(Math.atan2(end.x-before.x,before.y-end.y)*.65,-.75,.75);
     tether.angle+=(target-tether.angle)*(1-Math.exp(-5*step));
     tether.velocity.x=(end.x-end.px)/step; tether.velocity.y=(end.y-end.py)/step;
   }

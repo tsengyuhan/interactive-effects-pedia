@@ -20,6 +20,7 @@ export function createBalloon(document) {
       varying vec2 point;
       uniform sampler2D photo;
       uniform float pressure;
+      uniform float fisheye;
       void main() {
         vec2 p=point/0.985;
         // 下端收成短氣嘴，上部仍保持飽滿球面。
@@ -30,16 +31,21 @@ export function createBalloon(document) {
         vec3 n=vec3(p,sqrt(max(0.,1.-radius)));
         // 球面經緯度讓五官隨表面包覆；中央保留足夠照片比例。
         vec2 curved=vec2(atan(n.x,max(.001,n.z))/3.14159265,asin(n.y)/3.14159265);
-        vec2 uv=mix(p*.5,curved,.64)+.5;
+        vec2 mapped=mix(p*.5,curved,.35);
+        // 縮小中心取樣半徑，將鼻眼放大；外緣保持連續、不露空洞。
+        mapped*=1.-fisheye*.58*(1.-radius);
+        vec2 uv=mapped+.5;
         uv.y=1.-uv.y;
         vec3 color=texture2D(photo,uv).rgb;
         vec3 light=normalize(vec3(-.48,.66,1.));
         float diffuse=max(0.,dot(n,light));
         float rim=pow(1.-n.z,2.);
-        float gloss=pow(max(0.,dot(n,normalize(light+vec3(0.,0.,1.)))),34.);
+        float gloss=pow(max(0.,dot(n,normalize(light+vec3(0.,0.,1.)))),85.);
         // 不透明人臉包滿球面，以柔和方向光保留立體與原膚色。
-        color*=.89+.18*diffuse-.035*rim;
-        color+=vec3(1.,.99,.96)*gloss*(.14+.08*pressure);
+        float luminance=dot(color,vec3(.2126,.7152,.0722));
+        color=mix(vec3(luminance),color,1.10);
+        color*=.64+.43*diffuse-.025*rim;
+        color=mix(color,vec3(1.,.98,.94),gloss*(.085+.035*pressure));
         float alpha=1.-smoothstep(.990,1.,sqrt(radius));
         gl_FragColor=vec4(color,alpha);
       }`));
@@ -65,6 +71,7 @@ export function createBalloon(document) {
   const input = document.createElement('canvas'); input.width = input.height = 256;
   const context = input.getContext('2d', { willReadFrequently: true });
   const pressureUniform = gl.getUniformLocation(program, 'pressure');
+  const fisheyeUniform = gl.getUniformLocation(program, 'fisheye');
   return {
     canvas,
     update(headLayer, head) {
@@ -78,10 +85,11 @@ export function createBalloon(document) {
       gl.bindTexture(gl.TEXTURE_2D, texture);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, 256, 256, gl.RGBA, gl.UNSIGNED_BYTE, image.data);
     },
-    render(pressure) {
+    render(pressure,fisheye=.25) {
       if (gl.isContextLost()) throw new Error('WebGL context lost');
       gl.viewport(0, 0, 512, 512); gl.useProgram(program);
       gl.uniform1f(pressureUniform, pressure);
+      gl.uniform1f(fisheyeUniform, Math.max(0,Math.min(1,fisheye)));
       gl.drawArrays(gl.TRIANGLES,0,6);
       return canvas;
     },

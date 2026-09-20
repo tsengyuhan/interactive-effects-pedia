@@ -74,6 +74,20 @@ export function shardPose(view,piece) {
   return {...point,size:scale,airborne};
 }
 
+export function advanceWindShard(piece,dt,view,elapsed) {
+  // 重置陣風要能捲起靜止薄片並越出畫面，不再套用落片的邊界反彈。
+  piece.landed=false;piece.settled=false;
+  const steps=Math.max(1,Math.ceil(dt*120)),step=dt/steps;
+  for(let i=0;i<steps;i++) {
+    piece.age+=step;
+    const gust=.8+Math.min(1,elapsed/.35);
+    piece.gvx+=(6*gust-piece.gvx*.5)*step;
+    piece.vh+=(2.8+Math.sin(piece.phase+piece.age*8)*.8-piece.vh*2)*step;
+    piece.gx+=piece.gvx*step;piece.height=Math.max(0,piece.height+piece.vh*step);
+    piece.flip+=(5+Math.sin(piece.phase))*step;piece.tilt+=2*step;piece.angle+=3*step;
+  }
+}
+
 export function clipRoad(ctx,view) {
   ctx.beginPath();view.road.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.closePath();ctx.clip();
 }
