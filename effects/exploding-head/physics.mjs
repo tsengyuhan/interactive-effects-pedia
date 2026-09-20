@@ -1,19 +1,20 @@
 export const MAX_SCALE = 2.35;
+export const MAX_SWING = .32;
 export const clamp = (x, low, high) => Math.max(low, Math.min(high, x));
 
-export function portraitBounds(width, height, head) {
+export function portraitBounds(width, height, head, maxScale = MAX_SCALE) {
   if (!head) return { left: 0, top: 0, right: width, bottom: height };
-  const inflation = MAX_SCALE - 1;
+  const inflation = maxScale - 1;
   const radius = Math.max(head.cx - head.left, head.right - head.cx) * 1.24;
   const length = (head.bottom - head.top) * 1.05;
-  const turn = Math.sin(inflation * 0.028);
+  const turn = Math.sin(MAX_SWING);
   // 以最大尺寸保留浮動與旋轉空間；鎖定後充氣不會連帶縮小身體。
-  const reach = MAX_SCALE * (radius + length * turn) + inflation * 4;
+  const reach = maxScale * (radius + length * turn) + inflation * 4;
   return {
     left: Math.min(0, head.cx - reach),
     right: Math.max(width, head.cx + reach),
-    top: Math.min(0, head.bottom - MAX_SCALE * (length + radius * turn) - inflation * 9),
-    bottom: Math.max(height, head.bottom + MAX_SCALE * radius * turn)
+    top: Math.min(0, head.bottom - maxScale * (length + radius * turn) - inflation * 9),
+    bottom: Math.max(height, head.bottom + maxScale * radius * turn)
   };
 }
 
@@ -42,16 +43,16 @@ export function pump(state, speed) {
   state.velocity += 0.65;
 }
 
-export function advance(state, dt, tracked) {
+export function advance(state, dt, tracked, maxScale = MAX_SCALE) {
   if (state.exploded || !tracked) return false;
-  const target = 1 + state.pressure * (MAX_SCALE - 1);
+  const target = 1 + state.pressure * (maxScale - 1);
   const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
   const step = Math.min(dt, 0.05) / steps;
   for (let i = 0; i < steps; i++) {
     state.velocity += ((target - state.scale) * 95 - state.velocity * 13) * step;
     state.scale += state.velocity * step;
   }
-  if (state.pressure >= 1 && state.scale >= MAX_SCALE * 0.985) {
+  if (state.pressure >= 1 && state.scale >= maxScale * 0.985) {
     state.exploded = true;
     return true;
   }
@@ -101,23 +102,58 @@ export function insideHead(x, y, head) {
 export function splitMask(data, mw, mh, width, height, head, bodyRGBA, headRGBA) {
   for (let i = 0; i < data.length; i++) {
     const alpha = Math.round(clamp((data[i] - 0.38) / 0.42, 0, 1) * 255);
-    const isHead = insideHead((i % mw + 0.5) / mw * width, (Math.floor(i / mw) + 0.5) / mh * height, head);
+    const x=(i % mw + .5)/mw*width,y=(Math.floor(i/mw)+.5)/mh*height;
+    let cut=0;
+    if(head) {
+      const length=head.bottom-head.top,dx=Math.abs(x-head.cx);
+      const ratio=clamp((y-head.top)/length,0,1);
+      const taper=clamp((ratio-.62)/.38,0,1);
+      const radius=(head.right-head.left)/2*(1-taper)+head.chinWidth*taper;
+      const boundary=head.bottom-length*.055+length*.08*Math.min(1,(dx/head.chinWidth)**2);
+      const feather=Math.max(height/mh*1.15,length*.025);
+      const edge=Math.min(radius-dx,boundary-y,y-head.top+feather);
+      const amount=clamp((edge+feather*.5)/feather,0,1);
+      cut=amount*amount*(3-2*amount);
+    }
     const p = i * 4;
-    bodyRGBA[p + 3] = isHead ? 0 : alpha;
-    headRGBA[p + 3] = isHead ? alpha : 0;
+    headRGBA[p + 3] = Math.round(alpha*cut);
+    bodyRGBA[p + 3] = alpha-headRGBA[p + 3];
   }
 }
 
-export function balloonPose(head, state, now, view) {
-  const inflation = state.scale - 1;
+export function resetSwing() { return { angle:0,velocity:0,previousX:null,previousTime:0 }; }
+
+export function trackSwing(swing, x, now, frameWidth) {
+  const dt=(now-swing.previousTime)/1000;
+  if(swing.previousX!==null && dt>0 && dt<.2) {
+    const displacement=(x-swing.previousX)/frameWidth;
+    // 真正的追蹤位移施加角衝量；瞬間重定位不當成甩頭。
+    if(Math.abs(displacement)<.18) swing.velocity-=displacement*12;
+    else { swing.angle=0; swing.velocity=0; }
+  }
+  swing.previousX=x; swing.previousTime=now;
+}
+
+export function advanceSwing(swing, dt) {
+  const steps=Math.max(1,Math.ceil(dt*120)),step=dt/steps;
+  for(let i=0;i<steps;i++) {
+    swing.velocity+=(-swing.angle*24-swing.velocity*3.8)*step;
+    swing.angle+=swing.velocity*step;
+    if(Math.abs(swing.angle)>MAX_SWING) {
+      swing.angle=clamp(swing.angle,-MAX_SWING,MAX_SWING); swing.velocity*=.25;
+    }
+  }
+}
+
+export function balloonPose(head, state, now, view, swing = { angle:0 }) {
   const squash = clamp(state.velocity * .022, -.035, .055);
   const sourceWidth = head.right-head.left, sourceHeight = head.bottom-head.top;
   const width = sourceWidth * state.scale * (1 + state.pressure*.16) * (1+squash);
   const height = sourceHeight * state.scale * (1-squash*.7);
   return {
-    x: head.cx + Math.sin(now/580)*inflation*4,
-    y: head.bottom - inflation*6 + Math.sin(now/420)*inflation*3,
-    angle: Math.sin(now/720)*inflation*.028,
+    x: head.cx,
+    y: head.bottom,
+    angle: swing.angle,
     width, height, view, anchorX: head.cx, anchorY: head.bottom+sourceHeight*.06
   };
 }

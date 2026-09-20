@@ -1,5 +1,5 @@
-import { resetState, pump, advance, estimateHead, splitMask, portraitBounds, fitPortrait, balloonPose, fractureBalloon, advanceShard } from './physics.mjs';
-import { createBalloon } from './balloon.mjs';
+import { MAX_SCALE, resetState, pump, advance, estimateHead, splitMask, portraitBounds, fitPortrait, balloonPose, fractureBalloon, advanceShard, resetSwing, trackSwing, advanceSwing } from './physics.mjs';
+import { createBalloon, fillTexture } from './balloon.mjs';
 
 const shell = Shell.init({ id: 'exploding-head' });
 const canvas = document.createElement('canvas');
@@ -18,9 +18,12 @@ function surface() {
 }
 const frame = surface(), body = surface(), headLayer = surface();
 const bodyMask = surface(), headMask = surface(), debris = surface();
+const neckSample=surface(), neckLayer=surface(), neckMask=surface();
+let neckReady=false;
 let bodyPixels, headPixels;
 let state = resetState();
-let background = '#dcebe3', speed = 1;
+let background = '#dcebe3', speed = 1, maxScale=MAX_SCALE;
+let swing=resetSwing();
 let stream, segmenter, detector, audio;
 let stopped = false, ready = false, tracked = false, head = null;
 let raf = 0, lastTime = 0, lastVideoTime = -1, lastFrameAt = 0;
@@ -53,7 +56,8 @@ controls.append(status, meter, button);
 shell.container.append(controls);
 
 function updateUI() {
-  button.disabled = stopped || !ready || !tracked || document.hidden || state.exploded || state.pressure >= 1;
+  button.textContent=t(state.exploded?'重置':'打氣');
+  button.disabled = stopped || document.hidden || (!state.exploded && (!ready || !tracked || state.pressure >= 1));
   progress.value = state.pressure;
   percent.textContent = `${Math.round(state.pressure * 100)}%`;
   const key = stopped ? '效果已停止，請重新整理。' : !ready ? '正在準備攝影機與本地模型…'
@@ -69,12 +73,21 @@ shell.addParam({ type: 'color', key: 'background', label: '背景顏色', value:
   onChange: value => { background = value; draw(performance.now()); } });
 shell.addParam({ type: 'range', key: 'speed', label: '充氣速度', min: 0.5, max: 2, step: 0.25, value: speed,
   onChange: value => { speed = value; } });
-shell.addButton({ label: '重置', onClick: () => {
+shell.addParam({ type:'range',key:'maxScale',label:'氣球最大尺寸（倍）',min:1.5,max:4,step:.05,value:maxScale,
+  onChange:value=>{
+    maxScale=Number(value);
+    const target=1+state.pressure*(maxScale-1);
+    if(state.scale>target) { state.scale=target; state.velocity=Math.min(0,state.velocity); }
+    composition=head?portraitBounds(frame.canvas.width,frame.canvas.height,head,maxScale):null;
+  } });
+
+function resetEffect() {
   if (stopped) return;
   state = resetState(); particles = []; lastPose = null; composition = null;
+  swing=resetSwing();
   debris.canvas.width = debris.canvas.height = 1;
   updateUI();
-} });
+}
 
 function sound(explosion = false) {
   try {
@@ -107,6 +120,7 @@ function sound(explosion = false) {
 
 button.addEventListener('click', () => {
   if (button.disabled) return;
+  if(state.exploded) { resetEffect(); return; }
   sound(); pump(state, speed); updateUI();
 });
 
@@ -123,7 +137,7 @@ function infer(now) {
   const h = Math.round(video.videoHeight * w / video.videoWidth);
   if (w < 1 || h < 1) return;
   if (cameraWidth !== video.videoWidth || cameraHeight !== video.videoHeight) {
-    composition = null;
+    composition = null; swing=resetSwing();
     cameraWidth = video.videoWidth; cameraHeight = video.videoHeight;
   }
   for (const layer of [frame, body, headLayer]) {
@@ -142,7 +156,8 @@ function infer(now) {
     const data = mask.getAsFloat32Array();
     head = detections.length === 1 ? estimateHead(detections[0].boundingBox, data, mask.width, mask.height, w, h) : null;
     tracked = Boolean(head);
-    if (head && !composition) composition = portraitBounds(w, h, head);
+    if(head) trackSwing(swing,head.cx,now,w); else swing=resetSwing();
+    if (head && !composition) composition = portraitBounds(w, h, head,maxScale);
     if (!bodyPixels || bodyPixels.width !== mask.width || bodyPixels.height !== mask.height) {
       for (const layer of [bodyMask, headMask]) { layer.canvas.width = mask.width; layer.canvas.height = mask.height; }
       bodyPixels = bodyMask.ctx.createImageData(mask.width, mask.height);
@@ -158,7 +173,7 @@ function infer(now) {
       layer.ctx.drawImage(matte.canvas, 0, 0, w, h);
       layer.ctx.globalCompositeOperation = 'source-over';
     }
-    if (head && !state.exploded) balloon.update(headLayer.canvas, head);
+    if (head && !state.exploded) { balloon.update(headLayer.canvas, head); updateNeck(); }
     ready = true;
     lastFrameAt = now;
     clearTimeout(startupTimer);
@@ -173,29 +188,50 @@ function layout() {
 }
 
 function headPose(now, view) {
-  return balloonPose(head, state, now, view);
+  return balloonPose(head, state, now, view,swing);
+}
+
+function updateNeck() {
+  if(neckSample.canvas.width!==64) {
+    neckSample.canvas.width=neckSample.canvas.height=64;
+    neckLayer.canvas.width=neckMask.canvas.width=128;
+    neckLayer.canvas.height=neckMask.canvas.height=192;
+    const mask=neckMask.ctx.createImageData(128,192);
+    for(let y=0;y<192;y++) for(let x=0;x<128;x++) {
+      const t=y/191,radius=59-15*Math.sin(t*Math.PI);
+      const side=Math.max(0,Math.min(1,(radius-Math.abs(x-63.5))/5));
+      const vertical=Math.min(1,y/8,(191-y)/24);
+      mask.data[(y*128+x)*4+3]=Math.round(255*side*side*(3-2*side)*vertical);
+    }
+    neckMask.ctx.putImageData(mask,0,0);
+  }
+  const length=head.bottom-head.top;
+  neckSample.ctx.clearRect(0,0,64,64);
+  // 只從分割可靠的下巴中央取樣，透明／背景不會被拉成脖子。
+  neckSample.ctx.drawImage(headLayer.canvas,head.cx-head.chinWidth*.45,head.bottom-length*.17,head.chinWidth*.9,length*.10,0,0,64,64);
+  const image=neckSample.ctx.getImageData(0,0,64,64);
+  let valid=0;
+  for(let i=3;i<image.data.length;i+=4) if(image.data[i]>=180) valid++;
+  neckReady=valid>64;
+  if(!neckReady) return;
+  fillTexture(image.data,64,64);
+  for(let i=3;i<image.data.length;i+=4) image.data[i]=255;
+  neckSample.ctx.putImageData(image,0,0);
+  neckLayer.ctx.globalCompositeOperation='source-over'; neckLayer.ctx.clearRect(0,0,128,192);
+  neckLayer.ctx.drawImage(neckSample.canvas,0,0,128,192);
+  neckLayer.ctx.globalCompositeOperation='destination-in'; neckLayer.ctx.drawImage(neckMask.canvas,0,0);
+  neckLayer.ctx.globalCompositeOperation='source-over';
 }
 
 function neckBridge(pose) {
-  const length = head.bottom-head.top;
-  const half = head.chinWidth*.94;
-  // 在球面內側銜接原尺寸脖子，以同影格皮膚延伸遮住切線。
-  const topY = pose.y-pose.height*.14;
-  const topX = pose.x+Math.sin(pose.angle)*pose.height*.14;
-  const lowerY = pose.anchorY;
-  ctx.save(); ctx.beginPath();
-  ctx.moveTo(pose.anchorX-half, lowerY);
-  ctx.bezierCurveTo(pose.anchorX-half, head.bottom, topX-half*1.1, topY+length*.05, topX-half*1.25, topY);
-  ctx.lineTo(topX+half*1.25, topY);
-  ctx.bezierCurveTo(topX+half*1.1, topY+length*.05, pose.anchorX+half, head.bottom, pose.anchorX+half, lowerY);
-  ctx.closePath(); ctx.clip();
-  ctx.filter='blur(0.65px)';
-  ctx.drawImage(frame.canvas, head.cx-half*.65, head.bottom-length*.055, half*1.3, length*.105,
-    Math.min(topX,pose.anchorX)-half*1.35, topY-1, half*2.7+Math.abs(topX-pose.anchorX), lowerY-topY+2);
-  ctx.filter='none';
-  const shade=ctx.createLinearGradient(0,topY,0,lowerY);
-  shade.addColorStop(0,'rgba(30,18,13,0.16)'); shade.addColorStop(1,'rgba(30,18,13,0)');
-  ctx.fillStyle=shade; ctx.fillRect(topX-half*1.5,topY,half*3,lowerY-topY);
+  if(!neckReady) return;
+  const length=head.bottom-head.top;
+  const topX=pose.x+Math.sin(pose.angle)*pose.height*.16;
+  const topY=pose.y-Math.cos(pose.angle)*pose.height*.16;
+  const lowerY=head.bottom+length*.12,span=lowerY-topY;
+  ctx.save();
+  ctx.transform(1,0,(pose.anchorX-topX)/span,1,topX,topY);
+  ctx.drawImage(neckLayer.canvas,-head.chinWidth*1.52,0,head.chinWidth*3.04,span);
   ctx.restore();
 }
 
@@ -268,11 +304,12 @@ function tick(now) {
       lastVideoTime = video.currentTime; infer(now);
     }
     // 裝置暫停供幀時，不讓使用者對著過期的人像繼續打氣。
-    if (ready && now - lastFrameAt > 750) { tracked = false; updateUI(); }
+    if (ready && now - lastFrameAt > 750) { tracked = false; swing=resetSwing(); updateUI(); }
+    if(tracked) advanceSwing(swing,dt);
     for (const piece of particles) advanceShard(piece, dt);
     particles = particles.filter(piece => piece.age < piece.life);
     // 先計算上限附近的繪圖姿態，再用同一姿態切成碎片。
-    const burst = advance(state, dt, tracked);
+    const burst = advance(state, dt, tracked,maxScale);
     if (burst) {
       state.exploded = false; draw(now); state.exploded = true; explode();
     }
@@ -295,7 +332,7 @@ function release() {
   if (audio) { try { void audio.close().catch(() => {}); } catch {} audio = null; }
   particles = []; bodyPixels = headPixels = null;
   balloon?.release(); balloon = null;
-  for (const layer of [frame, body, headLayer, bodyMask, headMask, debris]) layer.canvas.width = layer.canvas.height = 1;
+  for (const layer of [frame, body, headLayer, bodyMask, headMask, debris,neckSample,neckLayer,neckMask]) layer.canvas.width = layer.canvas.height = 1;
   window.removeEventListener('resize', resize);
   document.removeEventListener('visibilitychange', visibility);
   updateUI(); draw(performance.now());
@@ -309,6 +346,7 @@ function fail(error, message) {
 
 function visibility() {
   cancelAnimationFrame(raf); lastTime = 0;
+  swing=resetSwing();
   if (document.hidden) {
     clearTimeout(startupTimer);
     if (audio?.state === 'running') void audio.suspend().catch(() => {});

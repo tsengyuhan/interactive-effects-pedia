@@ -29,14 +29,19 @@ export function createBalloon(document) {
         vec2 curved=vec2(atan(n.x,max(.001,n.z))/3.14159265,asin(n.y)/3.14159265);
         vec2 uv=mix(p*.5,curved,.64)+.5;
         uv.y=1.-uv.y;
-        vec3 color=texture2D(photo,uv).rgb;
+        vec4 sample=texture2D(photo,uv);
+        vec3 color=sample.rgb;
         vec3 light=normalize(vec3(-.48,.66,1.));
         float diffuse=max(0.,dot(n,light));
         float rim=pow(1.-n.z,2.);
         float gloss=pow(max(0.,dot(n,normalize(light+vec3(0.,0.,1.)))),34.);
-        color*=.60+.47*diffuse-.15*rim;
-        color+=vec3(1.,.96,.88)*gloss*(.23+.12*pressure);
-        float alpha=1.-smoothstep(.990,1.,sqrt(radius));
+        // 臉保留原亮度，透明區只留下薄膜反光，不包覆灰黑球殼。
+        color*=.96+.09*diffuse;
+        color+=vec3(1.,.99,.96)*gloss*(.14+.08*pressure);
+        float membrane=.035+rim*.18+gloss*.42;
+        float alpha=sample.a+membrane*(1.-sample.a);
+        color=(color*sample.a+vec3(.97,.99,1.)*membrane*(1.-sample.a))/max(alpha,.001);
+        alpha*=1.-smoothstep(.990,1.,sqrt(radius));
         gl_FragColor=vec4(color,alpha);
       }`));
     gl.linkProgram(program);
@@ -125,4 +130,6 @@ export function fillTexture(pixels, width, height) {
       for(let c=0;c<3;c++) pixels[index*4+c]=filled[index*4+c]*(1-blend)+sums[c]/(high-low+1)*blend;
     }
   }
+  // RGB延伸只為濾波防黑邊，膜的透明度仍由原本的人像遮罩決定。
+  for(let i=0;i<originalAlpha.length;i++) pixels[i*4+3]=originalAlpha[i];
 }
