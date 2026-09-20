@@ -23,8 +23,9 @@ export function createSceneAssets(document) {
 
 // 構圖只依視窗，鏡頭距離、氣量與最大尺寸都不改變消防栓大小。
 export function sceneLayout(width,height) {
-  const span=Math.max(100,height-(height<500?150:178)-74),unit=Math.min(span,width*1.18);
-  const x=width/2,ground=height-(height<500?180:145)-(height<500?0:unit*.25);
+  const span=Math.max(100,height-(height<500?150:178)-74),baseUnit=Math.min(span,width*1.18),unit=baseUnit*1.15;
+  // 共用鏡頭尺度與地板位移，讓球、栓、繩及投影一起拉近而不脫節。
+  const x=width/2,ground=height-(height<500?180:145)-(height<500?0:baseUnit*.25)+baseUnit*.15;
   const hydrantHeight=unit*.44,hydrantScale=hydrantHeight/1464;
   const view={width,height,x,ground,hydrantGround:ground,tetherGround:ground,unit,
     perspective:.5,depthScale:.52,roadSlope:0,roomHalf:roomHalfWidth(0),
