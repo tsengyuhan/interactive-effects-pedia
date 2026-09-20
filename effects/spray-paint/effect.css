@@ -35,31 +35,34 @@
 .aim-marker.calibrating { width:36px; height:36px; border:1px solid #f64b36; background:transparent; box-shadow:none; }
 .aim-marker.calibrating::before, .aim-marker.calibrating::after { content:''; position:absolute; background:#e4402d; left:50%; top:50%; transform:translate(-50%,-50%); width:48px; height:1px; }
 .aim-marker.calibrating::after { width:1px; height:48px; }
-.controller { overflow:auto; overscroll-behavior:contain; padding:78px 20px max(20px,env(safe-area-inset-bottom)); background:radial-gradient(ellipse at 50% 45%,#35453e,#101c1a 70%); }
-.controller-inner { width:min(100%,400px); margin:0 auto; text-align:center; }
+.controller { height:100vh; height:100dvh; overflow:auto; overscroll-behavior:contain; padding:calc(46px + env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left)); background:radial-gradient(ellipse at 50% 45%,#35453e,#101c1a 70%); }
+.controller-inner { width:min(100%,440px); min-height:100%; height:100%; margin:0 auto; text-align:center; display:flex; flex-direction:column; position:relative; }
+.controller-inner > * { flex-shrink:0; }
 .controller .eyebrow { font-size:10px; letter-spacing:.25em; color:#adb8a8; }
-.controller h1 { font-size:27px; margin:7px 0; font-weight:500; }
-.controller .sensor-note { min-height:38px; font-size:12px; line-height:1.5; color:#dedfc9; margin:8px 0; }
+.controller h1 { font-size:12px; line-height:16px; margin:0; font-weight:500; color:#aebcab; }
+.controller .spray-status { margin:2px 0; line-height:18px; min-height:18px; }
+.controller .sensor-note { font-size:12px; line-height:18px; color:#dedfc9; margin:2px 0 4px; }
 .controller .setup-buttons { display:flex; justify-content:center; gap:8px; }
-.controller .setup-buttons button { font-size:12px; padding:9px 12px; }
-.can-stage { height:320px; position:relative; width:220px; margin:10px auto 0; user-select:none; }
+.controller .setup-buttons button { font-size:12px; padding:7px 12px; min-height:36px; }
+.controller.is-calibrated .enable-sensor { display:none; }
+.can-stage { flex:1 0 230px; position:relative; width:100%; margin:4px auto 0; user-select:none; }
 .can-shadow { position:absolute; left:5px; right:5px; bottom:0; height:30px; border-radius:50%; background:#050c0bb8; filter:blur(10px); }
-.spray-can { position:absolute; bottom:12px; left:35px; width:150px; height:218px; border-radius:31px 31px 27px 27px / 20px 20px 17px 17px; background:linear-gradient(90deg,#5e6866,#dce0d6 8%,#a1aba3 17%,#fcfff0 33%,#9ba69e 64%,#576b62 88%,#bbc4b6); box-shadow:inset -3px 0 7px #071e2177,7px 13px 18px #0006; }
+.spray-can { position:absolute; bottom:12px; top:82px; left:10%; width:80%; border-radius:31px 31px 27px 27px / 20px 20px 17px 17px; background:linear-gradient(90deg,#5e6866,#dce0d6 8%,#a1aba3 17%,#fcfff0 33%,#9ba69e 64%,#576b62 88%,#bbc4b6); box-shadow:inset -3px 0 7px #071e2177,7px 13px 18px #0006; }
 .spray-can::before { content:''; position:absolute; left:1px; right:1px; top:-16px; height:32px; border-radius:50%; background:linear-gradient(180deg,#f3f2dd,#8b9892 45%,#cdd3c8 53%,#59675f); box-shadow:0 -2px 0 #e1e4d3; }
 .spray-can::after { content:''; position:absolute; bottom:5px; left:3px; right:3px; height:18px; border-radius:50%; border-bottom:3px solid #edf0d37a; }
-.can-label { position:absolute; top:38px; left:0; right:0; height:146px; color:#14221d; overflow:hidden; background:linear-gradient(90deg,#0003,transparent 28%,#ffffff20 35%,#0003 90%),var(--spray-color); display:flex; flex-direction:column; justify-content:center; }
-.can-label strong { font-size:33px; line-height:.9; font-weight:900; letter-spacing:-2px; transform:rotate(-8deg); }
+.can-label { position:absolute; top:17%; bottom:13%; left:0; right:0; color:#14221d; overflow:hidden; background:linear-gradient(90deg,#0003,transparent 28%,#ffffff20 35%,#0003 90%),var(--spray-color); display:flex; flex-direction:column; justify-content:center; }
+.can-label strong { font-size:clamp(34px,7dvh,65px); line-height:.9; font-weight:900; letter-spacing:-2px; transform:rotate(-8deg); }
 .can-label small { margin-top:18px; font-size:8px; letter-spacing:3px; }
-.nozzle-track { position:absolute; top:0; left:50%; width:92px; height:88px; transform:translateX(-50%); border:1px dashed #d5dfbf38; border-radius:18px; }
-.spray-app .nozzle { position:absolute; top:6px; left:17px; width:56px; height:43px; padding:0; border-radius:9px 9px 4px 4px; background:linear-gradient(90deg,#808a7d,#f5f5e4 30%,#b3b9a7 75%,#697b6c); box-shadow:0 -3px 0 #e1e4d2,inset 0 -5px 5px #3e4a3866,0 5px 9px #0005; touch-action:none; transition:transform .16s ease-out; cursor:grab; }
+.nozzle-track { position:absolute; top:0; left:50%; width:112px; height:92px; transform:translateX(-50%); border:1px dashed #d5dfbf38; border-radius:18px; }
+.spray-app .nozzle { position:absolute; top:6px; left:17px; width:76px; height:52px; padding:0; border-radius:9px 9px 4px 4px; background:linear-gradient(90deg,#808a7d,#f5f5e4 30%,#b3b9a7 75%,#697b6c); box-shadow:0 -3px 0 #e1e4d2,inset 0 -5px 5px #3e4a3866,0 5px 9px #0005; touch-action:none; transition:transform .16s ease-out; cursor:grab; }
 .spray-app .nozzle:hover { background:linear-gradient(90deg,#8b9381,#fffdeb 30%,#b3b9a7 75%,#697b6c); }
-.nozzle::before { content:''; position:absolute; width:10px; height:10px; background:#16231d; border:2px solid #687366; border-radius:50%; top:14px; left:23px; }
-.nozzle::after { content:'↓'; position:absolute; top:46px; left:18px; color:#e1e5d2; font-size:20px; }
+.nozzle::before { content:''; position:absolute; width:10px; height:10px; background:#16231d; border:2px solid #687366; border-radius:50%; top:18px; left:32px; }
+.nozzle::after { content:'↓'; position:absolute; top:52px; left:28px; color:#e1e5d2; font-size:20px; }
 .is-held .nozzle { transition:none; }
-.mist { position:absolute; top:7px; left:20px; width:180px; height:40px; opacity:0; pointer-events:none; background:radial-gradient(ellipse,#e3f7d54d,transparent 70%); }
+.mist { position:absolute; top:7px; left:10%; width:80%; height:60px; opacity:0; pointer-events:none; background:radial-gradient(ellipse,#e3f7d54d,transparent 70%); }
 .is-spraying .mist { animation:spray-mist .16s infinite alternate; }
 @keyframes spray-mist { from { opacity:.4; transform:scale(.8); } to { opacity:1; transform:scale(1.3); } }
-.spray-caption { font-size:12px; color:#d9deca; margin:3px 0 12px; }
+.spray-caption { font-size:11px; line-height:16px; color:#d9deca; margin:0 0 6px; }
 .palette { display:flex; justify-content:center; align-items:center; gap:12px; }
 .spray-app .swatch { width:30px; height:30px; padding:0; border-radius:50%; background:var(--swatch); border:2px solid #fff3; }
 .spray-app .swatch[aria-pressed=true] { outline:2px solid #eeecd9; outline-offset:3px; }
@@ -67,6 +70,17 @@
 .sensitivity { display:flex; align-items:center; justify-content:center; gap:14px; margin:19px 0 5px; font-size:12px; color:#b8c6b6; }
 .sensitivity input { width:160px; }
 .controller-footnote { font-size:10px; color:#94a590; line-height:1.6; margin:14px 0 0; }
+.controller-tools { position:relative; display:flex; justify-content:center; align-items:center; gap:8px; margin-top:8px; }
+.controller-tools button, .controller-settings summary { font-size:12px; min-height:36px; padding:8px; cursor:pointer; }
+.settings-content { position:absolute; z-index:3; bottom:calc(100% + 8px); left:0; right:0; max-height:35dvh; overflow:auto; padding:14px; border:1px solid #ffffff38; border-radius:12px; background:#15251ff5; box-shadow:0 -8px 30px #0006; }
+.settings-content .sensitivity { margin:0; flex-wrap:wrap; }
+.audio-note, .fullscreen-note { font-size:11px; line-height:16px; margin:4px 0 0; color:#f0d7a7; }
+.audio-note button { font-size:11px; padding:6px; }
+.portrait-note { position:fixed; z-index:5; inset:calc(60px + env(safe-area-inset-top)) 16px auto; padding:16px; border:1px solid #f0d7a7; border-radius:12px; background:#14241ff5; color:#f0d7a7; }
+.spray-controller .shell-back { top:calc(6px + env(safe-area-inset-top)); left:max(8px,env(safe-area-inset-left)); min-height:32px; padding:0 10px; font-size:12px; }
+.spray-controller .shell-actions { top:calc(6px + env(safe-area-inset-top)); right:max(8px,env(safe-area-inset-right)); gap:6px; }
+.spray-controller .shell-icon-button { width:32px; min-height:32px; }
+.spray-controller .shell-actions .lang-switch { min-height:32px; padding:4px 8px; }
 @media(max-width:650px) {
   .wall-heading { top:85px; }
   .wall-heading p { max-width:220px; }
@@ -76,15 +90,7 @@
   .wall-tools span { max-width:120px; }
 }
 @media(max-height:740px) {
-  .controller { padding-top:70px; }
-  .controller h1 { font-size:22px; }
-  .can-stage { height:245px; margin-top:4px; }
-  .spray-can { height:153px; }
-  .can-label { height:103px; top:24px; }
-  .can-label strong { font-size:27px; }
-  .can-label small { margin-top:10px; }
-  .controller .sensor-note { min-height:0; }
-  .controller-footnote { margin-top:8px; }
-  .sensitivity { margin-top:12px; }
+  .can-label strong { font-size:clamp(28px,6dvh,44px); }
+  .can-label small { margin-top:10px; letter-spacing:2px; }
 }
 @media(prefers-reduced-motion:reduce) { .is-spraying .mist { animation:none; opacity:.6; } }
