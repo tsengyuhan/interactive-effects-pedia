@@ -28,16 +28,12 @@ let stream, segmenter, detector, audio;
 let stopped = false, ready = false, tracked = false, head = null;
 let raf = 0, lastTime = 0, lastVideoTime = -1, lastFrameAt = 0;
 let width = 1, height = 1, dpr = 1, cameraTimer = 0, startupTimer = 0;
-let particles = [], lastPose = null, statusKey = '';
+let particles = [], lastPose = null;
 let scene=null,tether=null,hasTexture=false,cameraWidth=0,cameraHeight=0;
 let balloon,sceneAssets;
 
 const controls = document.createElement('div');
 controls.className = 'exploding-controls';
-const status = document.createElement('p');
-status.className = 'exploding-status';
-status.setAttribute('role', 'status');
-status.setAttribute('aria-live', 'polite');
 const meter = document.createElement('div');
 meter.className = 'exploding-meter';
 const progress = document.createElement('progress');
@@ -52,7 +48,7 @@ button.className = 'exploding-pump';
 button.textContent = t('打氣');
 button.disabled = true;
 meter.append(progress, percent);
-controls.append(status, meter, button);
+controls.append(meter, button);
 shell.container.append(controls);
 
 function canReset() {
@@ -65,15 +61,6 @@ function updateUI() {
   button.disabled = stopped || resetElapsed!==null || falling || document.hidden || (!state.exploded && (!ready || !tracked || state.pressure >= 1));
   progress.value = state.pressure;
   percent.textContent = `${Math.round(state.pressure * 100)}%`;
-  const key = stopped ? '效果已停止，請重新整理。' : !ready ? '正在準備攝影機與本地模型…'
-    : document.hidden ? '分頁暫停中'
-    : resetElapsed!==null ? '一陣風吹走碎片，準備下一顆氣球…'
-    : falling ? '等待所有碎片落地後，就能重置。'
-    : !tracked ? (state.exploded ? '追蹤遺失，氣球已爆炸；按重置再玩一次。' : '請一個人正對鏡頭，讓五官完整入鏡。')
-    : state.exploded ? '砰！碎片飄落，繩子垂下；按重置再玩一次。'
-    : state.pressure >= 1 ? '快爆炸了…'
-    : '連點打氣，讓酒瓶上的臉部氣球慢慢膨脹！';
-  if (key !== statusKey) { status.textContent = t(key); statusKey = key; }
 }
 
 shell.addParam({ type: 'color', key: 'background', label: '主色調', value: background,

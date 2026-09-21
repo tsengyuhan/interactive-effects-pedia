@@ -152,7 +152,6 @@ function harness(options = {}) {
     get drawnImageSizes() {return elements.find(el=>el.className==='exploding-stage').draws.filter(args=>args.length===5).map(args=>args.slice(3));},
     get extraButtons() { return extraButtons; },
     get button() { return elements.find(el => el.className === 'exploding-pump'); },
-    get status() { return elements.find(el => el.className === 'exploding-status').textContent; },
     get drawSources() { return elements.find(el => el.className === 'exploding-stage').draws.map(args=>args[0]); },
     get drawOps() {return elements.find(el=>el.className==='exploding-stage').operations;},
     get ballCanvas() { return vm.runInContext('balloon?.canvas',sandbox); },
@@ -213,7 +212,7 @@ test('完整互動：載入禁用、同幀不重推論、爆炸後追蹤／失�
   assert.equal(page.button.textContent,'碎片飄落中…'); assert.equal(page.button.disabled,true);
   page.faces(0); page.step();
   assert.deepEqual(page.state.tether[0],anchor);
-  assert.equal(page.state.tracked, false); assert.match(page.status, /落地/);
+  assert.equal(page.state.tracked, false);
   page.faces(1); page.step(); assert.equal(page.state.exploded, true);
   assert.deepEqual(page.state.tether[0],anchor);
   for (let i = 0; i < 440; i++) page.step();
@@ -294,7 +293,7 @@ test('模型初始化中切到背景不誤報逾時，回前景才推論', async
   assert.equal(page.button.disabled, false); page.leave();
 });
 
-test('效果內中文 UI（含動態狀態及 shell 標籤）都有英文翻譯', () => {
+test('效果內中文 UI（含動態按鈕及 shell 標籤）都有英文翻譯', () => {
   const i18n = fs.readFileSync(new URL('../../assets/i18n.js', import.meta.url), 'utf8');
   const context = { localStorage: { getItem: () => 'en' }, document: {
     createElement: () => ({ style: {} }), head: { append() {} }, addEventListener() {}, documentElement: {}, querySelectorAll: () => []
@@ -303,7 +302,7 @@ test('效果內中文 UI（含動態狀態及 shell 標籤）都有英文翻譯'
   vm.runInNewContext(i18n, context);
   const strings = [...source.matchAll(/(['"])((?:\\.|(?!\1).)*?)\1/g)].map(match => match[2]).filter(value => /[一-鿿]/.test(value));
   assert.ok(strings.length >= 18);
-  assert.ok(strings.includes('充氣速度') && strings.includes('快爆炸了…'));
+  assert.ok(strings.includes('充氣速度') && strings.includes('碎片飄落中…'));
   for (const value of strings) assert.notEqual(context.t(value), value, `缺翻譯：${value}`);
 });
 

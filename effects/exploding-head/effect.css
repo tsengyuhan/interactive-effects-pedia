@@ -5,10 +5,6 @@
   display: grid; gap: 8px; justify-items: center; pointer-events: auto;
   color: #183d39; text-align: center;
 }
-.exploding-status {
-  margin: 0; padding: 7px 13px; border-radius: 12px; background: #ffffffde;
-  font-size: 13px; line-height: 1.5; max-width: 100%;
-}
 .exploding-meter { display: flex; gap: 12px; align-items: center; padding: 5px 13px; border-radius: 24px; background: #ffffffde; font-variant-numeric: tabular-nums; }
 .exploding-meter progress { width: 140px; height: 9px; accent-color: #ef7756; }
 .exploding-pump {
@@ -23,5 +19,4 @@
 @media (max-height: 500px) {
   .exploding-controls { bottom: 8px; gap: 4px; }
   .exploding-pump { min-height: 44px; font-size: 17px; }
-  .exploding-status { font-size: 11px; padding: 3px 8px; }
 }
