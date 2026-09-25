@@ -1,8 +1,8 @@
-import { clamp } from './physics.mjs';
+import { clamp,MAX_SCALE } from './physics.mjs';
 import { projectPoint,roomSurfaces,roomHalfWidth,drawRoom,drawRoomShadow } from './room.mjs';
 
 // 量測 flower.png 的有效像素：根部在底邊，綁點位於花頭下方的莖上。
-export const FLOWER={width:1024,height:1536,centerX:512,top:47,bottom:1535,tieY:690,tieRadius:15};
+export const FLOWER={width:1024,height:1536,centerX:512,top:47,stemTop:650,bottom:1535,tieY:690,tieRadius:15};
 
 export function createSceneAssets(document) {
   let released=false;
@@ -24,13 +24,79 @@ export function createSceneAssets(document) {
   return assets;
 }
 
-function rotateFlowerPoint(view,x,y) {
-  const angle=view.flower?.angle||0,cos=Math.cos(angle),sin=Math.sin(angle);
-  return {x:view.x+x*cos-y*sin,y:view.ground+x*sin+y*cos};
+export function flowerPoint(view,imgX,imgY) {
+  const scale=view.flowerScale,a=view.flower?.angle||0;
+  const stemLength=(FLOWER.bottom-FLOWER.stemTop)*scale;
+  const distance=Math.min((FLOWER.bottom-imgY)*scale,stemLength);
+  const angle=a*distance/stemLength;
+  // 小角度直接用極限式，避免曲率半徑除以零。
+  const centerX=Math.abs(a)<1e-5?0:stemLength/a*(1-Math.cos(angle));
+  const centerY=Math.abs(a)<1e-5?-distance:-stemLength/a*Math.sin(angle);
+  const offset=(imgX-FLOWER.centerX)*scale;
+  const extra=Math.max(0,FLOWER.stemTop-imgY)*scale;
+  return {x:view.x+centerX+extra*Math.sin(a)+offset*Math.cos(angle),
+    y:view.ground+centerY-extra*Math.cos(a)+offset*Math.sin(angle),angle};
+}
+
+function createGrass() {
+  let seed=1729;
+  const random=()=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/4294967296);
+  const clumps=[];
+  const add=(x,z,height,count)=>clumps.push({x,z,blades:Array.from({length:count},(_,i)=>({
+    height:height*(.4+random()*.6),
+    lean:(i/(count-1)-.5)*1.8+(random()-.5)*.9,
+    curl:.15+random()*.65,
+    droop:random()<.34?.25+random()*.35:random()*.22,
+    width:.0009+random()*.0008,
+    dry:random()<.15,
+    shade:Math.floor(random()*3)
+  }))});
+  // 根部一叢、外側成群且逐漸稀疏，避免草像等距插在地上。
+  add(0,0,.066,12);
+  for(const [ring,groups] of [[.038,5],[.085,7],[.137,7]]) {
+    for(let group=0;group<groups;group++) {
+      const direction=(group+random()*.65)*Math.PI*2/groups;
+      const centerRadius=ring*(.82+random()*.35);
+      const count=ring<.05?2:ring<.1?3:1;
+      for(let i=0;i<count;i++) {
+        const offset=(random()-.5)*(ring<.1?.024:.014);
+        const radius=centerRadius+offset;
+        const a=direction+(random()-.5)*.3;
+        const height=(ring<.05?.05:ring<.1?.036:.021)*(.7+random()*.4);
+        add(Math.cos(a)*radius,Math.sin(a)*radius,height,ring<.05?6+Math.floor(random()*3):ring<.1?4+Math.floor(random()*4):3+Math.floor(random()*3));
+      }
+    }
+  }
+  return clumps.sort((a,b)=>b.z-a.z);
+}
+
+export function drawGrass(ctx,view,front=false) {
+  const colors=[['#4f6e2e','#8ea455'],['#49662b','#6b8a3c'],['#5c7633','#91a653']];
+  for(const clump of view.grass) {
+    if((clump.z<0)!==front)continue;
+    const base=projectPoint(view,clump.x,clump.z);
+    for(const blade of clump.blades) {
+      const h=blade.height,lean=blade.lean;
+      const tip=projectPoint(view,clump.x+lean*h*(.65+blade.curl),clump.z,h*(1-blade.droop));
+      const rise=h*view.unit*base.scale;
+      const drift=lean*rise;
+      const width=Math.max(.65,view.unit*blade.width*base.scale);
+      const gradient=ctx.createLinearGradient(base.x,base.y,tip.x,tip.y);
+      const [dark,light]=blade.dry?['#77783a','#a9a46a']:colors[blade.shade];
+      gradient.addColorStop(0,dark);gradient.addColorStop(1,light);
+      ctx.fillStyle=gradient;
+      ctx.beginPath();ctx.moveTo(base.x-width,base.y);
+      ctx.bezierCurveTo(base.x+drift*.14-width,base.y-rise*.72,
+        tip.x-drift*.2,base.y-rise*(1.12-blade.droop*.25),tip.x,tip.y);
+      ctx.bezierCurveTo(tip.x-drift*.2+width*.4,base.y-rise*(1.12-blade.droop*.25),
+        base.x+drift*.14+width,base.y-rise*.72,base.x+width,base.y);
+      ctx.closePath();ctx.fill();
+    }
+  }
 }
 
 export function updateFlowerAnchor(view) {
-  const scale=view.flowerScale, point=rotateFlowerPoint(view,0,(FLOWER.tieY-FLOWER.bottom)*scale);
+  const point=flowerPoint(view,FLOWER.centerX,FLOWER.tieY);
   view.anchor.x=point.x;view.anchor.y=point.y;
   return view.anchor;
 }
@@ -39,14 +105,21 @@ export function updateFlowerAnchor(view) {
 export function sceneLayout(width,height) {
   const span=Math.max(100,height-(height<500?150:178)-74),baseUnit=Math.min(span,width*1.18),unit=baseUnit*1.15;
   // 共用鏡頭尺度與地板位移，讓球、花、繩及投影一起拉近而不脫節。
-  const x=width/2,ground=height-(height<500?180:145)-(height<500?0:baseUnit*.25)+baseUnit*.15;
+  const x=width/2,initialGround=height-(height<500?180:145)-(height<500?0:baseUnit*.25)+baseUnit*.15;
   const flowerHeight=unit*.30,flowerScale=flowerHeight/(FLOWER.bottom-FLOWER.top);
   const baseRopeLength=unit*(.44*825/1464+.22);
+  const baseSize=unit*.195;
+  // 依直立繩與最大球的實際球頂校正地面，地面最多只移到畫面底緣上方 24px。
+  const tieOffset=(FLOWER.tieY-FLOWER.bottom)*flowerScale;
+  const knot=Math.max(4,baseSize*.065);
+  const top=initialGround+tieOffset-baseRopeLength-knot-baseSize*MAX_SCALE;
+  const ground=Math.min(height-24,initialGround+Math.max(0,16-top));
   const view={width,height,x,ground,unit,flower:{angle:0},
     perspective:.5,depthScale:.52,roadSlope:0,roomHalf:roomHalfWidth(0),
-    nearDepth:-.65,farDepth:.3,flowerHeight,flowerScale,baseSize:unit*.195,
+    nearDepth:-.65,farDepth:.3,flowerHeight,flowerScale,baseSize,
     anchor:{x:0,y:0},baseRopeLength,ropeLength:baseRopeLength};
   updateFlowerAnchor(view);
+  view.grass=createGrass();
   view.road=roomSurfaces(view)[0].points.map(p=>projectPoint(view,p.x,p.z,p.height));
   return view;
 }
@@ -105,9 +178,9 @@ export function advanceTether(tether, view, dt, time, swing, exploded) {
     tether.angle+=(target-tether.angle)*(1-Math.exp(-5*step));
     tether.velocity.x=(end.x-end.px)/step; tether.velocity.y=(end.y-end.py)/step;
   }
-  // 花使用繩子的第一段方向，延遲一幀跟隨；爆炸後繩子自然垂下，角度回正。
+  // 未爆炸時花跟隨繩子第一段；爆炸後改以零角度為目標，避免垂繩風動回饋花角。
   const first=tether.points[1],root=tether.points[0];
-  const ropeTarget=clamp(Math.atan2(first.x-root.x,root.y-first.y)*.55,-.35,.35);
+  const ropeTarget=exploded?0:clamp(Math.atan2(first.x-root.x,root.y-first.y)*.55,-.35,.35);
   view.flower.angle+=(ropeTarget-view.flower.angle)*(1-Math.exp(-6*dt));
   updateFlowerAnchor(view);
   points[0].x=points[0].px=view.anchor.x;points[0].y=points[0].py=view.anchor.y;
@@ -125,14 +198,13 @@ export function drawRoomScene(ctx,view,assets,primary) {
   drawRoom(ctx,view,primary);
   if(!assets?.flower)return;
   // 花頭、葉片與莖合成一個投影輪廓，並繞根部套用同一個擺動角度。
-  const scale=view.flowerScale;
   const outline=[
     [
-      [512,1535],[490,1535],[490,760],[420,720],[330,665],[235,570],[176,430],
+      [512,1535],[490,1535],[490,1300],[490,1050],[490,760],[420,720],[330,665],[235,570],[176,430],
       [215,280],[330,130],[512,47],[700,110],[820,250],[855,420],[810,565],
-      [705,660],[610,720],[535,760],[535,1535]
+      [705,660],[610,720],[535,760],[535,1050],[535,1300],[535,1535]
     ].map(([x,y])=>{
-      const p=rotateFlowerPoint(view,(x-FLOWER.centerX)*scale,(FLOWER.bottom-y)*-scale);
+      const p=flowerPoint(view,x,y);
       // projectShadow 要的是世界單位；這裡的 p 是旋轉後畫布像素，需先除回場景 unit。
       return {x:(p.x-view.x)/view.unit,z:0,height:(view.ground-p.y)/view.unit};
     })
@@ -142,14 +214,31 @@ export function drawRoomScene(ctx,view,assets,primary) {
 
 export function drawFlower(ctx,view,assets) {
   if(!assets?.flower)return;
-  const s=view.flowerScale,r=Math.max(FLOWER.tieRadius*s,view.baseSize*.045),y=(FLOWER.tieY-FLOWER.bottom)*s;
-  ctx.save();ctx.strokeStyle='#87755a';ctx.lineWidth=Math.max(1,view.baseSize*.014);
-  ctx.translate(view.x,view.ground);ctx.rotate(view.flower.angle);
-  ctx.beginPath();ctx.ellipse(0,y,r,r*.27,0,Math.PI,Math.PI*2);ctx.stroke();
-  ctx.drawImage(assets.flower,-FLOWER.centerX*s,-FLOWER.bottom*s,FLOWER.width*s,FLOWER.height*s);
-  ctx.strokeStyle='#b4a183';ctx.beginPath();ctx.ellipse(0,y,r,r*.27,0,0,Math.PI);ctx.stroke();
-  ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(-r*.22,y+r*.30);ctx.lineTo(r*.20,y+r*.28);ctx.closePath();ctx.stroke();
-  ctx.beginPath();ctx.moveTo(r*.15,y+r*.25);ctx.lineTo(r*.32,y+r*.70);ctx.stroke();ctx.restore();
+  const s=view.flowerScale,r=Math.max(FLOWER.tieRadius*s,view.baseSize*.045);
+  const tie=flowerPoint(view,FLOWER.centerX,FLOWER.tieY);
+  ctx.save();ctx.translate(tie.x,tie.y);ctx.rotate(tie.angle);
+  ctx.lineWidth=Math.max(1,view.baseSize*.014);
+  ctx.strokeStyle='#87755a';ctx.beginPath();ctx.ellipse(0,0,r,r*.27,0,Math.PI,Math.PI*2);ctx.stroke();ctx.restore();
+  const stemHeight=FLOWER.bottom-FLOWER.stemTop;
+  for(let i=23;i>=0;i--) {
+    const top=FLOWER.stemTop+stemHeight*i/24,bottom=FLOWER.stemTop+stemHeight*(i+1)/24;
+    const sourceTop=Math.max(FLOWER.stemTop,top-.5),sourceBottom=Math.min(FLOWER.bottom,bottom+.5);
+    const middle=(top+bottom)/2,p=flowerPoint(view,FLOWER.centerX,middle);
+    ctx.save();ctx.translate(p.x,p.y);ctx.rotate(p.angle);
+    ctx.drawImage(assets.flower,0,sourceTop,FLOWER.width,sourceBottom-sourceTop,
+      -FLOWER.centerX*s,(sourceTop-middle)*s,FLOWER.width*s,(sourceBottom-sourceTop)*s);
+    ctx.restore();
+  }
+  const head=flowerPoint(view,FLOWER.centerX,FLOWER.stemTop);
+  ctx.save();ctx.translate(head.x,head.y);ctx.rotate(head.angle);
+  ctx.drawImage(assets.flower,0,0,FLOWER.width,FLOWER.stemTop+1,
+    -FLOWER.centerX*s,-FLOWER.stemTop*s,FLOWER.width*s,(FLOWER.stemTop+1)*s);
+  ctx.restore();
+  ctx.save();ctx.translate(tie.x,tie.y);ctx.rotate(tie.angle);
+  ctx.lineWidth=Math.max(1,view.baseSize*.014);
+  ctx.strokeStyle='#b4a183';ctx.beginPath();ctx.ellipse(0,0,r,r*.27,0,0,Math.PI);ctx.stroke();
+  ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(-r*.22,r*.30);ctx.lineTo(r*.20,r*.28);ctx.closePath();ctx.stroke();
+  ctx.beginPath();ctx.moveTo(r*.15,r*.25);ctx.lineTo(r*.32,r*.70);ctx.stroke();ctx.restore();
 }
 
 export function drawTether(ctx,tether,view,pose) {

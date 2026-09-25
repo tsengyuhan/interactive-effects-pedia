@@ -89,7 +89,7 @@ function harness(options = {}) {
         setTransform() {}, fillRect() { el.draws = [];el.operations=[]; }, clearRect() { el.draws = []; },
         drawImage(...args) { el.draws.push(args);el.operations.push({type:'image',source:args[0]}); }, save() {}, restore() {}, translate() {}, scale() {}, rotate() {},transform() {},
         createImageData(width, height) { return { width, height, data: new Uint8ClampedArray(width * height * 4) }; },
-        putImageData() {}, ellipse() {}, fill() {}, stroke() {el.operations.push({type:'stroke',color:this.strokeStyle});}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, bezierCurveTo() {}, clip() {},
+        putImageData() {}, ellipse() {}, fill() {}, stroke() {el.operations.push({type:'stroke',color:this.strokeStyle});}, beginPath() {}, closePath() {}, moveTo() {}, lineTo() {}, quadraticCurveTo() {}, bezierCurveTo() {}, clip() {},
         getImageData(x,y,width,height) { return {width,height,data:new Uint8ClampedArray(width*height*4).fill(255)}; },
         createLinearGradient() { return { addColorStop() {} }; }
       }; }
@@ -702,6 +702,19 @@ test('氣球爆炸失去浮力後繩索回落，重置回復上浮初始姿態',
   const reset=sceneAPI.createTether(view);assert.ok(reset.points.at(-1).y<view.anchor.y-view.ropeLength*.35);
 });
 
+test('爆炸後花角平滑回正並停止抖動', () => {
+  const view=sceneAPI.sceneLayout(1280,665),tether=sceneAPI.createTether(view);
+  for(let i=0;i<120;i++)sceneAPI.advanceTether(tether,view,16/1000,i*16,{angle:.3},false);
+  assert.ok(Math.abs(view.flower.angle)>.01);
+  const angles=[];
+  for(let i=0;i<300;i++) {
+    sceneAPI.advanceTether(tether,view,16/1000,(i+120)*16,{angle:0},true);
+    if(i>=200)angles.push(view.flower.angle);
+  }
+  assert.ok(angles.every(angle=>Math.abs(angle)<.002));
+  for(let i=1;i<angles.length;i++)assert.ok(Math.abs(angles[i]-angles[i-1])<.0005);
+});
+
 test('桌面與手機初始球花均可見，最大尺寸只影響球面，繩頂精確連結', () => {
   for(const [width,height] of [[1280,665],[390,844],[844,390]]) {
     const view=sceneAPI.sceneLayout(width,height),tether=sceneAPI.createTether(view),snapshot=JSON.stringify(view);
@@ -715,6 +728,16 @@ test('桌面與手機初始球花均可見，最大尺寸只影響球面，繩�
       assert.equal(JSON.stringify(view),snapshot);
       assert.ok(pose.width>first.width);
     }
+  }
+});
+
+test('預設繩長與最大球在各視窗完整顯示，地面保留底部空間', () => {
+  for(const [width,height] of [[1920,945],[1280,665],[1280,609],[390,580],[844,390]]) {
+    const view=sceneAPI.sceneLayout(width,height);
+    const pose=sceneAPI.scenePose(view,sceneAPI.createTether(view),
+      {velocity:0,scale:physics.MAX_SCALE,pressure:1});
+    assert.ok(pose.y-pose.height>=16-1e-9,`${width}×${height} 球頂超出安全範圍`);
+    assert.ok(view.ground<=height-24,`${width}×${height} 地面太低`);
   }
 });
 
@@ -778,7 +801,7 @@ test('爆後長時間仍保留所有落片，重置一次清除', async () => {
   for(let i=0;i<750;i++)page.step(50);
   assert.equal(page.state.particles,32);assert.ok(page.pieces.every(piece=>piece.settled && piece.height===0));
   assert.ok(page.pieces.every(piece=>piece.textureHeight>20));
-  assert.equal(page.drawnImageSizes.length,33);
+  assert.equal(page.drawnImageSizes.length,32);
   assert.ok(page.drawnImageSizes.every(([w,h])=>w>0 && h>20),'落地高度歸零不能讓drawImage貼圖高度也歸零');
   assert.equal(page.drawnImageSizes.filter(([,h])=>h===frozenHeight).length,32,'32片保留爆炸當下貼圖高度');
   page.reset();assert.equal(page.state.particles,32);for(let i=0;i<130;i++)page.step();assert.equal(page.state.particles,0);page.leave();
@@ -916,4 +939,25 @@ test('短繩左右歪頭時繩先畫、小花遮住綁點，完整繩球同在�
     assert.deepEqual(page.renders.at(-1),[page.state.pressure,page.state.fisheye]);
   }
   page.leave();
+});
+
+
+test('花莖彎曲時根部固定，綁點與花頭共用映射', () => {
+  const view=sceneAPI.sceneLayout(844,390);
+  const {FLOWER,flowerPoint,updateFlowerAnchor}=sceneAPI;
+  const close=(a,b)=>assert.ok(Math.abs(a-b)<1e-8);
+  for(const angle of [-.35,0,.35]) {
+    view.flower.angle=angle;updateFlowerAnchor(view);
+    const root=flowerPoint(view,FLOWER.centerX,FLOWER.bottom);
+    close(root.x,view.x);close(root.y,view.ground);close(root.angle,0);
+    const tie=flowerPoint(view,FLOWER.centerX,FLOWER.tieY);
+    close(tie.x,view.anchor.x);close(tie.y,view.anchor.y);
+    const head=flowerPoint(view,FLOWER.centerX,FLOWER.stemTop);
+    if(angle===0) {close(head.x,view.x);close(head.y,view.ground-(FLOWER.bottom-FLOWER.stemTop)*view.flowerScale);}
+    else {
+      const length=(FLOWER.bottom-FLOWER.stemTop)*view.flowerScale;
+      assert.ok(Math.abs(head.x-(view.x+length*Math.sin(angle)))>length*.005);
+      close(head.angle,angle);
+    }
+  }
 });

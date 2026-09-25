@@ -1,5 +1,5 @@
 import { MAX_SCALE, resetState, pump, advance, estimateHead, fractureBalloon, resetSwing, trackSwing, trackRoll, advanceSwing } from './physics.mjs';
-import { createSceneAssets,sceneLayout,createTether,setRopeLength,advanceTether,scenePose,drawRoomScene,drawFlower,drawTether } from './scene.mjs';
+import { createSceneAssets,sceneLayout,createTether,setRopeLength,advanceTether,scenePose,drawRoomScene,drawFlower,drawGrass,drawTether } from './scene.mjs';
 import { placeShard,advanceGroundShard,advanceWindShard,shardPose,clipRoad,drawBalloonShadow,drawShardShadow } from './ground.mjs';
 import { createBalloon } from './balloon.mjs';
 
@@ -231,8 +231,10 @@ function draw(now) {
   for(const piece of particles) drawShardShadow(ctx,scene,piece);
   const ordered=[...particles].sort((a,b)=>b.gz-a.gz);
   for(const piece of ordered) if(piece.gz>=0) drawPiece(piece);
+  drawGrass(ctx,scene);
   drawTether(ctx,tether,scene,lastPose);
   drawFlower(ctx,scene,sceneAssets);
+  drawGrass(ctx,scene,true);
   if(lastPose) {
     ctx.save();ctx.translate(lastPose.x,lastPose.y);ctx.rotate(lastPose.angle);
     ctx.drawImage(balloon.render(state.pressure,fisheye),-lastPose.width/2,-lastPose.height,lastPose.width,lastPose.height);
