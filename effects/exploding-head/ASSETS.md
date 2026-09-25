@@ -1,14 +1,40 @@
 # 素材來源與目前用途
 
-素材使用內建 image_gen 工具生成及編輯，執行時不連外網。v12 新增酒瓶，舊街景與消防栓保留但停用。`thumb.png` 為本版瀏覽器截圖，並非新生成素材。
+素材使用內建 image_gen 工具生成及編輯，執行時不連外網。v13 改用小花，舊酒瓶、街景與消防栓保留但停用。`thumb.png` 為本版瀏覽器截圖，並非新生成素材。
 
 - `street.png`：1536×1024 舊街道底圖，保留檔案但 v10 不再載入或顯示。
 - `hydrant.png`：1024×1536 舊透明消防栓，v12 不再載入或顯示；保留原檔。
 - `bottle.png`：1024×1536 透明玻璃酒瓶與琥珀色酒液，保留生成圖片原生 alpha；外部透明、空瓶頸部分透光、液面清楚可見。瓶身有效範圍約 (251,51)–(767,1360)，繩環綁在 y320 的瓶頸。
+- `flower.png`：1024×1536 透明寫實小雛菊，白花瓣、黃色花心、綠莖與一對綠葉。實測有效範圍約 `x=176..855、y=47..1535`，莖根切齊底邊，水平中心 `x=512`；程式綁點量測為 `y=690`、綁點莖半徑約 15 px。
 - 兩面牆與地板由 `room.mjs` 的有限平面、主色配色與 Canvas 光影即時繪製，不使用背景圖片。
 - 臉球仍使用原 `balloon.mjs` shader，沒有跟隨場景主色染色；v10 開始時 SHA256 `70a506e66d2bf097888ce330cc1d98be196f1aeafebfb3cc0be9a086f0f32363`，本版未更改。
 
 ## 最終生成與編輯提示詞
+
+### 小花生成（v13，內建工具）
+
+Use case: photorealistic-natural.
+Asset type: transparent PNG sprite for an interactive browser scene.
+Primary request: a single realistic small white daisy growing from one thin green stem, with one pair of small green leaves. It must look like a real macro product photograph, not an illustration.
+Scene/backdrop: none; genuinely transparent background.
+Subject: one upright daisy, white petals around a yellow flower center, slender green stem and two leaves.
+Style/medium: photorealistic natural flower cutout, crisp clean edges, realistic botanical textures.
+Composition/framing: portrait 1024x1536 canvas; stem perfectly centered and vertical; the root end of the stem is cut exactly at the bottom canvas edge, with no soil, pot, grass, or ground; flower head in the upper area with generous transparent margin around it; slight top-down front view, normal 50mm lens perspective, matching a realistic room-composited object.
+Lighting/mood: soft directional light from upper-left front, right side slightly darker, no cast shadow.
+Color palette: white petals, warm yellow center, natural varied greens.
+Materials/textures: subtle real petal veins and translucency, realistic stem and leaves.
+Constraints: preserve true alpha=0 outside the flower; no painted background of any kind; no checkerboard; no gray/white/black rectangle; root touches bottom edge; one flower only.
+Avoid: vase, pot, soil, grass, floor, shadow, halo, glow, balloon, string, hand, text, watermark, extra flowers, illustration, CGI look.
+
+### 小花去背編輯（v13，內建工具，最終採用）
+
+Use case: background-extraction.
+Asset type: final transparent PNG sprite for a browser compositing scene.
+Edit target: the supplied single realistic white daisy image.
+Primary request: isolate EXACTLY the same one daisy, preserving the white petals, yellow center, green stem, two leaves, natural botanical texture, lighting direction, camera angle, and original 1024x1536 canvas position.
+Remove the entire black/gray/green photographic backdrop, all glow, halo, fog, and any cast shadow. Output a genuinely transparent PNG: alpha=0 everywhere outside the flower, leaves, and stem; no painted background, no black/white/gray rectangle, no checkerboard.
+Keep the stem root cut exactly at the bottom canvas edge with no soil, pot, grass, or ground. Keep one flower only. This is a clean background extraction, do not redesign, add, or relight the flower.
+Avoid: any background, gradient, halo, glow, shadow, vase, pot, soil, grass, floor, balloon, string, text, watermark, extra objects.
 
 ### 酒瓶生成（v12，內建工具）
 

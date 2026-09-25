@@ -1,12 +1,12 @@
 import { MAX_SCALE, resetState, pump, advance, estimateHead, fractureBalloon, resetSwing, trackSwing, trackRoll, advanceSwing } from './physics.mjs';
-import { createSceneAssets,sceneLayout,createTether,setRopeLength,advanceTether,scenePose,drawRoomScene,drawBottle,drawTether } from './scene.mjs';
+import { createSceneAssets,sceneLayout,createTether,setRopeLength,advanceTether,scenePose,drawRoomScene,drawFlower,drawTether } from './scene.mjs';
 import { placeShard,advanceGroundShard,advanceWindShard,shardPose,clipRoad,drawBalloonShadow,drawShardShadow } from './ground.mjs';
 import { createBalloon } from './balloon.mjs';
 
 const shell = Shell.init({ id: 'exploding-head' });
 const canvas = document.createElement('canvas');
 canvas.className = 'exploding-stage';
-canvas.setAttribute('aria-label', t('酒瓶上的臉部氣球'));
+canvas.setAttribute('aria-label', t('小花上的臉部氣球'));
 shell.container.append(canvas);
 const ctx = canvas.getContext('2d');
 const video = document.createElement('video');
@@ -69,7 +69,7 @@ shell.addParam({ type: 'range', key: 'speed', label: '充氣速度', min: 0.5, m
   onChange: value => { speed = value; } });
 shell.addParam({type:'range',key:'fisheye',label:'魚眼程度',min:0,max:1,step:.05,value:fisheye,
   onChange:value=>{fisheye=Number(value);draw(performance.now());}});
-shell.addParam({type:'range',key:'ropeScale',label:'繩長（倍）',min:.6,max:1.5,step:.05,value:ropeScale,
+shell.addParam({type:'range',key:'ropeScale',label:'繩長（倍）',min:.6,max:2.5,step:.05,value:ropeScale,
   onChange:value=>{ropeScale=Number(value);if(scene)setRopeLength(scene,tether,ropeScale);draw(performance.now());}});
 shell.addParam({ type:'range',key:'maxScale',label:'氣球最大尺寸（倍）',min:1.5,max:4,step:.05,value:maxScale,
   onChange:value=>{
@@ -231,8 +231,8 @@ function draw(now) {
   for(const piece of particles) drawShardShadow(ctx,scene,piece);
   const ordered=[...particles].sort((a,b)=>b.gz-a.gz);
   for(const piece of ordered) if(piece.gz>=0) drawPiece(piece);
-  drawBottle(ctx,scene,sceneAssets);
   drawTether(ctx,tether,scene,lastPose);
+  drawFlower(ctx,scene,sceneAssets);
   if(lastPose) {
     ctx.save();ctx.translate(lastPose.x,lastPose.y);ctx.rotate(lastPose.angle);
     ctx.drawImage(balloon.render(state.pressure,fisheye),-lastPose.width/2,-lastPose.height,lastPose.width,lastPose.height);
@@ -362,7 +362,7 @@ async function start() {
   try { balloon = createBalloon(document); }
   catch (error) { fail(error, '無法建立 3D 氣球，請啟用瀏覽器硬體加速，並使用 Chrome／Edge 重新整理。'); return; }
   sceneAssets=createSceneAssets(document);
-  const assetsReady=sceneAssets.ready.catch(error=>fail(error,'酒瓶素材載入失敗，請確認圖片完整後重新整理。'));
+  const assetsReady=sceneAssets.ready.catch(error=>fail(error,'小花素材載入失敗，請確認圖片完整後重新整理。'));
   try { await camera(); }
   catch (error) {
     fail(error, '無法開啟攝影機，請允許攝影機權限、關閉占用相機的程式，再經 start.bat 或 HTTPS 開啟並重新整理。');
